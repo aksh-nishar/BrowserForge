@@ -1,12 +1,19 @@
 """One function per step type: (driver, step) -> ActionResult.
 
+Actions that write files (download, screenshot) also take an ActionContext.
+
 Actions never raise for expected failures (bad config, driver timeouts, missing
 elements); they return ActionResult(success=False, error=...) so the runner has a
 single failure path. Unexpected exceptions are bugs and are left to propagate.
 """
 
+import re
+import shutil
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from datetime import datetime
+from pathlib import Path
+from typing import Any
 
 import structlog
 
@@ -20,6 +27,16 @@ logger = structlog.get_logger(__name__)
 class ActionResult:
     success: bool
     error: str | None = None
+    data: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class ActionContext:
+    """Per-step run context: where to write files and what time it is."""
+
+    job_dir: Path
+    step_index: int = 1
+    now: Callable[[], datetime] = datetime.now
 
 
 def _label(step: Step) -> str:
@@ -30,14 +47,21 @@ def _fail(step: Step, message: str) -> ActionResult:
     return ActionResult(success=False, error=f"{_label(step)}: {message}")
 
 
+def _selector_of(step: Step) -> str | None:
+    selector = step.config.get("selector")
+    if isinstance(selector, str) and selector.strip():
+        return selector
+    return None
+
+
 def _run(
     step: Step,
     call: Callable[[str, str], None],
     needs_value: bool = False,
 ) -> ActionResult:
     """Validate selector (and value), run `call(selector, value)`, map driver errors."""
-    selector = step.config.get("selector")
-    if not isinstance(selector, str) or not selector.strip():
+    selector = _selector_of(step)
+    if selector is None:
         return _fail(step, "missing required field 'selector'")
 
     value = ""
@@ -72,6 +96,115 @@ def do_select_option(driver: PageDriver, step: Step) -> ActionResult:
 
 def do_check(driver: PageDriver, step: Step) -> ActionResult:
     return _run(step, lambda selector, _value: driver.check(selector))
+
+
+def do_upload(driver: PageDriver, step: Step) -> ActionResult:
+    """Upload one file (str) or several (list) to a file input.
+
+    Every path is checked on disk first, so a typo fails fast with a clear message
+    instead of a confusing browser error.
+    """
+    selector = _selector_of(step)
+    if selector is None:
+        return _fail(step, "missing required field 'selector'")
+
+    raw = step.config.get("files")
+    if raw is None or raw == [] or raw == "":
+        return _fail(step, "missing required field 'files'")
+    items = [raw] if isinstance(raw, str) else raw
+    if not isinstance(items, list) or not all(isinstance(p, str) and p.strip() for p in items):
+        return _fail(step, "'files' must be a file path or a list of file paths")
+
+    missing = [p for p in items if not Path(p).is_file()]
+    if missing:
+        return _fail(step, f"file(s) not found: {', '.join(missing)}")
+
+    try:
+        driver.upload(selector, items)
+    except DriverError as exc:
+        return _fail(step, str(exc))
+    return ActionResult(success=True)
+
+
+def _unique_path(directory: Path, filename: str) -> Path:
+    """`directory/filename`, or `name_2.ext`, `name_3.ext`... if it already exists."""
+    candidate = directory / filename
+    stem, suffix = Path(filename).stem, Path(filename).suffix
+    counter = 2
+    while candidate.exists():
+        candidate = directory / f"{stem}_{counter}{suffix}"
+        counter += 1
+    return candidate
+
+
+def do_download(driver: PageDriver, step: Step, ctx: ActionContext) -> ActionResult:
+    """Click `selector` to trigger a download, then move the file into job_dir/downloads/.
+
+    Optional `save_as` renames the file (directory parts are stripped). Existing files
+    are never overwritten. On success, data["path"] is the saved location.
+    """
+    selector = _selector_of(step)
+    if selector is None:
+        return _fail(step, "missing required field 'selector'")
+
+    save_as = step.config.get("save_as")
+    if save_as is not None and (
+        not isinstance(save_as, str) or Path(save_as).name.strip() in ("", ".", "..")
+    ):
+        return _fail(step, "'save_as' must be a file name")
+
+    try:
+        driver.click(selector)
+        downloaded = Path(driver.wait_for_download())
+    except DriverTimeoutError:
+        return _fail(step, "no download started after the click (timed out waiting for it)")
+    except DriverError as exc:
+        return _fail(step, str(exc))
+
+    if not downloaded.is_file():
+        return _fail(step, f"the browser reported a download but the file is missing: {downloaded}")
+
+    downloads_dir = ctx.job_dir / "downloads"
+    filename = Path(save_as).name if isinstance(save_as, str) else downloaded.name
+    try:
+        downloads_dir.mkdir(parents=True, exist_ok=True)
+        destination = _unique_path(downloads_dir, filename)
+        shutil.move(str(downloaded), str(destination))
+    except OSError as exc:
+        return _fail(step, f"could not save the downloaded file: {exc}")
+    return ActionResult(success=True, data={"path": str(destination)})
+
+
+def _safe_name(text: str) -> str:
+    return re.sub(r"[^A-Za-z0-9_-]+", "_", text).strip("_") or "step"
+
+
+def screenshot_path(ctx: ActionContext, step: Step) -> Path:
+    """job_dir/screenshots/<index>_<step name>_<YYYYmmdd-HHMMSS>.png"""
+    stamp = ctx.now().strftime("%Y%m%d-%H%M%S")
+    name = _safe_name(step.name or step.type)
+    return ctx.job_dir / "screenshots" / f"{ctx.step_index:02d}_{name}_{stamp}.png"
+
+
+def do_screenshot(driver: PageDriver, step: Step, ctx: ActionContext) -> ActionResult:
+    """Full-page screenshot, or just one element when `selector` is given.
+
+    On success, data["path"] is the saved image.
+    """
+    selector = step.config.get("selector")
+    if selector is not None and (not isinstance(selector, str) or not selector.strip()):
+        return _fail(step, "'selector' must be a non-empty string when given")
+
+    path = screenshot_path(ctx, step)
+    full_page = selector is None and bool(step.config.get("full_page", True))
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        driver.screenshot(str(path), selector=selector, full_page=full_page)
+    except DriverError as exc:
+        return _fail(step, str(exc))
+    except OSError as exc:
+        return _fail(step, f"could not create the screenshots folder: {exc}")
+    return ActionResult(success=True, data={"path": str(path)})
 
 
 _LOGIN_REQUIRED = (
