@@ -33,6 +33,7 @@ dev = [
     "pytest-mock>=3.15.1",
     "pytest-playwright>=0.9.0",
     "ruff>=0.16.9",
+    "types-openpyxl>=3.1.5.20260827",
     "types-pyyaml>=6.0.12.20260906",
 ]
 
