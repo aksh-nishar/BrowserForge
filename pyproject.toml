@@ -33,10 +33,12 @@ dev = [
     "pytest-mock>=3.15.1",
     "pytest-playwright>=0.9.0",
     "ruff>=0.16.9",
+    "types-pyyaml>=6.0.12.20260906",
 ]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+pythonpath = ["tests"]
 addopts = "-m unit"
 markers = [
     "unit: fast tests, no browser/network (default)",
@@ -53,4 +55,5 @@ select = ["E", "F", "I", "B", "UP"]
 [tool.mypy]
 python_version = "3.13"
 strict = true
-mypy_path = "src"
+mypy_path = "src:tests"
+explicit_package_bases = true

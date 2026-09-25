@@ -1,0 +1,11 @@
+url: https://the-internet.herokuapp.com/login
+login:
+  username_selector: "#username"
+  password_selector: "#password"
+  submit_selector: "button[type=submit]"
+  username: tomsmith
+  password: SuperSecretPassword!
+  success_url_contains: /secure
+steps:
+  - type: screenshot
+    name: after_login
