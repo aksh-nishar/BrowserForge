@@ -127,6 +127,35 @@ def do_check(driver: PageDriver, step: Step) -> ActionResult:
     return _run(step, lambda selector, _value: driver.check(selector))
 
 
+def css_string(value: str) -> str:
+    """`value` as a double-quoted CSS string, so any text is safe inside `[value=...]`."""
+    escaped = []
+    for char in value:
+        if char in ('"', "\\"):
+            escaped.append("\\" + char)
+        elif ord(char) < 0x20 or ord(char) == 0x7F:
+            escaped.append(f"\\{ord(char):x} ")  # control characters, as CSS hex escapes
+        else:
+            escaped.append(char)
+    return '"' + "".join(escaped) + '"'
+
+
+def do_choose(driver: PageDriver, step: Step) -> ActionResult:
+    """Pick one radio button of a group by its value.
+
+    `selector` names the group, e.g. `input[name=gender]`; `value` is the option to pick, e.g.
+    `female`. Clicks `input[name=gender][value="female"]`. Use `check` for a single checkbox.
+    """
+    group = _selector_of(step)
+    if group is not None and "," in group:
+        return _fail(step, "'selector' must be one selector for the whole group, without commas")
+
+    def pick(selector: str, value: str) -> None:
+        driver.check(f"{selector}[value={css_string(value)}]")
+
+    return _run(step, pick, needs_value=True)
+
+
 def do_upload(driver: PageDriver, step: Step) -> ActionResult:
     """Upload one file (str) or several (list) to a file input.
 

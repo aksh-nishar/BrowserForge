@@ -6,6 +6,7 @@ import pytest
 
 from browserforge.app import create_default_app
 from browserforge.cli import (
+    ENV_DATA_DIR,
     ENV_JOBS_DIR,
     ENV_JSON_LOGS,
     ENV_RECIPES_DIR,
@@ -142,6 +143,27 @@ def test_json_logs_also_go_to_a_rotating_file_under_logs() -> None:
     ):
         create_default_app()
     configure.assert_called_once_with(json_logs=True, log_file=Path("logs") / "app.log")
+
+
+def test_the_data_folder_defaults_to_data_and_can_be_changed() -> None:
+    assert build_parser().parse_args([]).data_dir == "data"
+    assert build_parser().parse_args(["--data-dir", "elsewhere"]).data_dir == "elsewhere"
+
+
+def test_main_passes_the_data_folder_through_the_environment() -> None:
+    with patch.dict(os.environ, {}, clear=False), patch("browserforge.cli.uvicorn.run"):
+        main(["--data-dir", "my_data"])
+        assert os.environ[ENV_DATA_DIR] == "my_data"
+
+
+def test_default_app_reads_the_data_folder_and_starts_the_scheduler_with_the_server(
+    tmp_path: Path,
+) -> None:
+    env = {ENV_DATA_DIR: str(tmp_path / "d"), ENV_JSON_LOGS: "0"}
+    with patch.dict(os.environ, env), patch("browserforge.app.configure_logging"):
+        app = create_default_app()
+    assert app.state.data_dir == tmp_path / "d"
+    assert app.state.scheduler.running is False  # it starts with the server's lifespan, not here
 
 
 def test_the_console_script_points_at_the_cli() -> None:

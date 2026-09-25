@@ -18,6 +18,8 @@ recipes/*
 # Runtime output
 jobs/
 logs/
+# Schedules and saved data sheets/profiles (may hold personal data)
+data/
 .mypy_cache/
 .ruff_cache/
 .pytest_cache/

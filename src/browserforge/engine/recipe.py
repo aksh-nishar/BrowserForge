@@ -13,6 +13,7 @@ STEP_TYPES = frozenset(
         "click",
         "select_option",
         "check",
+        "choose",
         "login",
         "upload",
         "download",

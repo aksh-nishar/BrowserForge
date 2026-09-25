@@ -7,7 +7,7 @@ the end writes `run_log.json` (audit trail) and `output.xlsx` (if any step extra
 
 import json
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -20,6 +20,7 @@ from browserforge.engine.actions import (
     ActionContext,
     ActionResult,
     do_check,
+    do_choose,
     do_click,
     do_download,
     do_extract_table,
@@ -33,6 +34,7 @@ from browserforge.engine.actions import (
     do_wait_for_selector,
     screenshot_path,
 )
+from browserforge.engine.data_rows import redact
 from browserforge.engine.driver import PageDriver
 from browserforge.engine.errors import RETRYABLE_KINDS, humanize
 from browserforge.engine.excel_export import build_workbook, save_workbook
@@ -54,6 +56,7 @@ HANDLERS: dict[str, Handler] = {
     "click": _plain(do_click),
     "select_option": _plain(do_select_option),
     "check": _plain(do_check),
+    "choose": _plain(do_choose),
     "login": _plain(do_login),
     "upload": _plain(do_upload),
     "download": do_download,
@@ -95,17 +98,44 @@ class RunLog:
     steps: list[StepLog] = field(default_factory=list)
 
 
-def _planned_steps(recipe: Recipe) -> list[Step]:
+class DryRunError(Exception):
+    """A dry run was asked for on a recipe that has no step marked `submit: true`."""
+
+
+def _is_submit(step: Step) -> bool:
+    return step.config.get("submit") is True
+
+
+def has_submit_step(recipe: Recipe) -> bool:
+    return any(_is_submit(step) for step in recipe.steps)
+
+
+def _stop_before_submit(steps: list[Step]) -> list[Step]:
+    """Everything up to the first `submit: true` step, which becomes a screenshot; the rest is cut.
+
+    A dry run must never submit for real, so a recipe with no marked step is refused rather
+    than run in full.
+    """
+    for index, step in enumerate(steps):
+        if _is_submit(step):
+            return [*steps[:index], Step(type="screenshot", name="dry_run_before_submit")]
+    raise DryRunError(
+        "A test run needs one step marked 'submit: true' (the button that sends the form). "
+        "This recipe has none, so it would submit for real."
+    )
+
+
+def _planned_steps(recipe: Recipe, dry_run: bool = False) -> list[Step]:
     steps = [Step(type="goto", name="open_start_page", config={"url": recipe.url})]
     if recipe.login is not None:
         steps.append(Step(type="login", name="login", config=dict(recipe.login)))
     steps.extend(recipe.steps)
-    return steps
+    return _stop_before_submit(steps) if dry_run else steps
 
 
-def total_steps(recipe: Recipe) -> int:
+def total_steps(recipe: Recipe, dry_run: bool = False) -> int:
     """How many steps a run executes: the recipe's own, plus the automatic start page and login."""
-    return len(_planned_steps(recipe))
+    return len(_planned_steps(recipe, dry_run))
 
 
 def execute_step(driver: PageDriver, step: Step, ctx: ActionContext) -> ActionResult:
@@ -209,12 +239,20 @@ def run_recipe(
     on_step_start: Callable[[int, int, Step], None] | None = None,
     on_step_end: Callable[[StepLog], None] | None = None,
     sleep: Callable[[float], None] = time.sleep,
+    secrets: Sequence[str] = (),
+    dry_run: bool = False,
+    tables_out: dict[str, list[dict[str, Any]]] | None = None,
 ) -> RunLog:
     """Run `recipe` on `driver`, writing run_log.json (and output.xlsx) into `job_dir`.
 
     `on_step_start(index, total, step)` and `on_step_end(step_log)` report live progress;
     a callback that raises is logged and ignored, it never breaks the run. `sleep` is
     injectable so retry back-off can be tested without waiting.
+
+    `secrets` are values (passwords, ID numbers) replaced by *** in every error message that
+    reaches the log or the dashboard. `dry_run` stops before the step marked `submit: true`
+    (raises DryRunError if there is none). `tables_out`, when given, also receives the scraped
+    tables so a caller (bulk runs) can merge them across runs.
     """
     job_path = Path(job_dir)
     job_id = job_id or job_path.name
@@ -226,7 +264,7 @@ def run_recipe(
         url=recipe.url,
         started_at=started.isoformat(timespec="seconds"),
     )
-    steps = _planned_steps(recipe)
+    steps = _planned_steps(recipe, dry_run)
     tables: dict[str, list[dict[str, Any]]] = {}
 
     with bound_contextvars(job_id=job_id, recipe=recipe_name):
@@ -245,19 +283,22 @@ def run_recipe(
             )
             failure_shot = None if result.success else _failure_screenshot(driver, step, ctx)
             duration_ms = int((time.perf_counter() - step_clock) * 1000)
+            error = redact(result.error, secrets) if result.error else None
 
             step_log = StepLog(
                 index=index,
                 type=step.type,
                 name=step.name,
                 success=result.success,
-                error=result.error,
+                error=error,
                 duration_ms=duration_ms,
                 data=_loggable_data(result.data),
                 attempts=attempts,
-                retry_errors=retry_errors,
+                retry_errors=[redact(text, secrets) for text in retry_errors],
                 error_kind=result.error_kind,
-                human_error=humanize(result.error_kind, result.error) if result.error else None,
+                human_error=redact(humanize(result.error_kind, result.error), secrets)
+                if result.error
+                else None,
                 failure_screenshot=failure_shot,
             )
             run_log.steps.append(step_log)
@@ -269,7 +310,7 @@ def run_recipe(
                 step_type=step.type,
                 success=result.success,
                 duration_ms=duration_ms,
-                error=result.error,
+                error=error,
             )
 
             rows = result.data.get("rows")
@@ -281,6 +322,8 @@ def run_recipe(
                 run_log.skipped_steps = len(steps) - index
                 break
 
+        if tables_out is not None:
+            tables_out.update(tables)
         if tables:
             steps_before_export = len(run_log.steps)
             _export_excel(run_log, tables, job_path)

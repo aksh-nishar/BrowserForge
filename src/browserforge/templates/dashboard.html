@@ -60,7 +60,7 @@
     }
     .row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin-bottom: 12px; }
     .row label { min-width: 160px; font-weight: 600; }
-    input[type="file"], select {
+    input[type="file"], input[type="text"], input[type="password"], select {
       flex: 1 1 220px;
       min-width: 0;
       padding: 8px;
@@ -85,7 +85,9 @@
       outline: 3px solid var(--accent);
       outline-offset: 2px;
     }
-    #message { min-height: 1.5em; margin: 4px 0 0; }
+    .row.check label { min-width: 0; font-weight: 400; display: flex; align-items: center; gap: 8px; }
+    .hint { margin: 0 0 12px; color: var(--muted); }
+    #message { min-height: 1.5em; margin: 4px 0 0; white-space: pre-line; }
     #message.error { color: var(--bad); }
     #message.ok { color: var(--ok); }
     .status-line { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin-bottom: 8px; }
@@ -134,7 +136,40 @@
         <select id="recipe-select"></select>
         <button type="button" id="run-btn" class="primary" disabled>Run</button>
       </div>
+      <div class="row check" id="dry-run-row" hidden>
+        <label><input type="checkbox" id="dry-run"> Test run: fill everything in, but stop before the submit button</label>
+      </div>
       <p id="message" role="status" aria-live="polite"></p>
+    </section>
+
+    <section class="card" id="data-card" aria-labelledby="h-data" hidden>
+      <h2 id="h-data">Data for this recipe</h2>
+      <p class="hint" id="data-help"></p>
+      <div class="row">
+        <label for="data-mode">How to supply it</label>
+        <select id="data-mode">
+          <option value="typed">Type the values (one run)</option>
+          <option value="sheet">Upload a sheet (one run per row)</option>
+        </select>
+      </div>
+      <div id="typed-fields"></div>
+      <div id="sheet-fields" hidden>
+        <div class="row">
+          <label for="data-file">Data file (.csv or .xlsx)</label>
+          <input type="file" id="data-file" accept=".csv,.xlsx">
+        </div>
+        <div id="mapping-box" hidden>
+          <p class="hint" id="preview-summary"></p>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>The recipe needs</th><th>Take it from column</th></tr></thead>
+              <tbody id="mapping-body"></tbody>
+            </table>
+          </div>
+          <div id="preview-problems" class="notice error" role="alert" hidden></div>
+        </div>
+      </div>
+      <p class="hint" id="env-note" hidden></p>
     </section>
 
     <section class="card" id="status-card" aria-labelledby="h-status" hidden>
@@ -145,8 +180,15 @@
       </div>
       <progress id="progress" max="100" value="0" aria-label="Run progress"></progress>
       <div id="failure-box" class="notice error" role="alert" hidden></div>
+      <div id="dry-run-note" class="notice warn" hidden>This was a test run: nothing was submitted.</div>
       <div id="warnings"></div>
-      <div class="table-wrap">
+      <div class="table-wrap" id="failed-rows-wrap" hidden>
+        <table>
+          <thead><tr><th>Row</th><th>Details</th><th>Step</th><th>What went wrong</th></tr></thead>
+          <tbody id="failed-rows-body"></tbody>
+        </table>
+      </div>
+      <div class="table-wrap" id="steps-wrap">
         <table>
           <thead>
             <tr><th>#</th><th>Step</th><th>Result</th><th>Time</th><th>Details</th></tr>
@@ -161,6 +203,37 @@
       <div id="downloads"></div>
       <div id="gallery"></div>
       <p id="no-results" class="empty" hidden>This run produced no files.</p>
+    </section>
+
+    <section class="card" id="schedule-card" aria-labelledby="h-schedule">
+      <h2 id="h-schedule">Scheduled runs</h2>
+      <p class="hint">Runs the recipe chosen above automatically. It only happens while this dashboard is running on this computer: a run due while it is closed is skipped.</p>
+      <div class="row">
+        <label for="schedule-when">When</label>
+        <input type="text" id="schedule-when" placeholder="daily 08:00" autocomplete="off">
+      </div>
+      <p class="hint">Examples: daily 08:00 &middot; weekly mon 09:30 &middot; hourly &middot; every 15 minutes &middot; 30 8 * * mon-fri</p>
+      <div class="row">
+        <label for="schedule-tz">Timezone</label>
+        <input type="text" id="schedule-tz" value="local" autocomplete="off">
+      </div>
+      <div class="row" id="schedule-data-row" hidden>
+        <label for="schedule-file">Data sheet (.csv or .xlsx)</label>
+        <input type="file" id="schedule-file" accept=".csv,.xlsx">
+      </div>
+      <div class="row">
+        <button type="button" id="schedule-btn">Add schedule</button>
+      </div>
+      <p id="schedule-message" role="status" aria-live="polite" class="hint"></p>
+      <p id="schedule-empty" class="empty">No schedules yet.</p>
+      <div class="table-wrap" id="schedule-wrap" hidden>
+        <table>
+          <thead>
+            <tr><th>Recipe</th><th>When</th><th>Next run</th><th>Last run</th><th></th></tr>
+          </thead>
+          <tbody id="schedule-body"></tbody>
+        </table>
+      </div>
     </section>
   </main>
 
@@ -201,8 +274,128 @@
       return ms < 1000 ? ms + " ms" : (ms / 1000).toFixed(1) + " s";
     }
 
+    let recipes = [];
+    // Mirrors the server's rule for names that hold secrets (password, PIN, token...): such fields
+    // are typed into a masked box.
+    const SECRET_WORDS = ["password", "passwd", "pass", "secret", "token", "otp", "cvv", "pin",
+      "ssn", "aadhaar", "aadhar", "apikey", "credential", "credentials"];
+
+    function isSecretName(name) {
+      const lowered = name.toLowerCase();
+      return lowered.includes("password") || lowered.split(/[^a-z0-9]+/).some((part) => SECRET_WORDS.includes(part));
+    }
+
+    function selectedRecipe() {
+      return recipes.find((recipe) => recipe.name === $("recipe-select").value) || null;
+    }
+
+    function showRecipeControls() {
+      const recipe = selectedRecipe();
+      const hasSubmit = Boolean(recipe && recipe.has_submit);
+      $("dry-run-row").hidden = !hasSubmit;
+      if (!hasSubmit) $("dry-run").checked = false;
+      $("schedule-data-row").hidden = !(recipe && recipe.placeholders.length);
+
+      const needsData = Boolean(recipe && recipe.placeholders.length);
+      const usesEnv = Boolean(recipe && recipe.env_vars.length);
+      $("data-card").hidden = !(needsData || usesEnv);
+      $("data-mode").closest(".row").hidden = !needsData;
+      $("typed-fields").hidden = !needsData;
+      $("sheet-fields").hidden = true;
+      $("data-mode").value = "typed";
+      $("data-file").value = "";
+      $("mapping-box").hidden = true;
+      $("typed-fields").replaceChildren();
+      $("data-help").textContent = needsData
+        ? "This recipe fills in " + recipe.placeholders.map((name) => "{{" + name + "}}").join(", ") + "."
+        : "";
+      const envNote = $("env-note");
+      envNote.hidden = !usesEnv;
+      envNote.textContent = usesEnv
+        ? "Secret values are read from these environment variables on this computer: " + recipe.env_vars.join(", ") + "."
+        : "";
+      if (needsData) {
+        for (const name of recipe.placeholders) {
+          const row = el("div", { class: "row" });
+          row.appendChild(el("label", { for: "value-" + name }, name));
+          row.appendChild(el("input", {
+            type: isSecretName(name) ? "password" : "text",
+            id: "value-" + name,
+            "data-name": name,
+            autocomplete: "off",
+          }));
+          $("typed-fields").appendChild(row);
+        }
+      }
+    }
+
+    function typedValues() {
+      const values = {};
+      for (const input of $("typed-fields").querySelectorAll("input")) values[input.dataset.name] = input.value;
+      return values;
+    }
+
+    function currentMapping() {
+      const mapping = {};
+      for (const select of $("mapping-body").querySelectorAll("select")) {
+        if (select.value) mapping[select.dataset.name] = select.value;
+      }
+      return mapping;
+    }
+
+    function showDataMode() {
+      const sheet = $("data-mode").value === "sheet";
+      $("typed-fields").hidden = sheet;
+      $("sheet-fields").hidden = !sheet;
+    }
+
+    function renderMapping(preview) {
+      $("mapping-box").hidden = false;
+      $("preview-summary").textContent = preview.rows + " row(s) found. Columns: " + preview.headers.join(", ");
+      $("mapping-body").replaceChildren(...preview.placeholders.map((name) => {
+        const select = el("select", { "data-name": name, "aria-label": "Column for " + name });
+        select.appendChild(el("option", { value: "" }, "(not matched)"));
+        for (const header of preview.headers) select.appendChild(el("option", { value: header }, header));
+        select.value = preview.mapping[name] || "";
+        select.addEventListener("change", () => previewSheet(currentMapping()));
+        const row = el("tr");
+        row.appendChild(el("td", {}, name));
+        const cell = el("td");
+        cell.appendChild(select);
+        row.appendChild(cell);
+        return row;
+      }));
+      showProblems(preview.problems);
+    }
+
+    function showProblems(problems) {
+      const box = $("preview-problems");
+      box.hidden = !problems.length;
+      box.textContent = problems.join("\n");
+      box.style.whiteSpace = "pre-line";
+    }
+
+    async function previewSheet(chosenMapping) {
+      const file = $("data-file").files[0];
+      const recipe = selectedRecipe();
+      if (!file || !recipe) { $("mapping-box").hidden = true; return; }
+      const form = new FormData();
+      form.append("recipe_name", recipe.name);
+      form.append("file", file);
+      if (chosenMapping) form.append("mapping", JSON.stringify(chosenMapping));
+      try {
+        renderMapping(await api("/data/preview", { method: "POST", body: form }));
+      } catch (error) {
+        $("mapping-box").hidden = false;
+        $("preview-summary").textContent = "";
+        $("mapping-body").replaceChildren();
+        showProblems([error.message]);
+      }
+    }
+
     async function loadRecipes(selectName) {
       const data = await api("/recipes");
+      recipes = data.recipes;
       const select = $("recipe-select");
       select.replaceChildren();
       for (const recipe of data.recipes) {
@@ -217,6 +410,7 @@
       if (select.selectedOptions.length && select.selectedOptions[0].disabled) select.value = "";
       $("run-btn").disabled = !select.value;
       if (!data.recipes.length) select.appendChild(el("option", { value: "" }, "No recipes yet - upload one"));
+      showRecipeControls();
     }
 
     async function uploadRecipe() {
@@ -234,18 +428,39 @@
       }
     }
 
+    async function startJob(recipe, dryRun) {
+      if (!recipe.placeholders.length) {
+        return api("/jobs", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ recipe_name: recipe.name, dry_run: dryRun }),
+        });
+      }
+      const form = new FormData();
+      form.append("recipe_name", recipe.name);
+      form.append("dry_run", dryRun ? "true" : "false");
+      if ($("data-mode").value === "sheet") {
+        form.append("file", $("data-file").files[0]);
+        form.append("mapping", JSON.stringify(currentMapping()));
+      } else {
+        form.append("values", JSON.stringify(typedValues()));
+      }
+      return api("/jobs/bulk", { method: "POST", body: form });
+    }
+
     async function runRecipe() {
-      const name = $("recipe-select").value;
-      if (!name) return;
+      const recipe = selectedRecipe();
+      if (!recipe) return;
+      if (recipe.placeholders.length && $("data-mode").value === "sheet" && !$("data-file").files.length) {
+        say("Choose a data file first.", "error");
+        return;
+      }
+      const dryRun = recipe.has_submit && $("dry-run").checked;
       $("run-btn").disabled = true;
       $("results-card").hidden = true;
       say("Starting...", "");
       try {
-        const job = await api("/jobs", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ recipe_name: name }),
-        });
+        const job = await startJob(recipe, dryRun);
         say("Job " + job.job_id + " started.", "ok");
         $("status-card").hidden = false;
         startPolling(job.job_id);
@@ -282,7 +497,8 @@
       if (status.done) {
         stopPolling();
         $("run-btn").disabled = !$("recipe-select").value;
-        say(status.status === "complete" ? "Finished." : "The run failed.", status.status === "complete" ? "ok" : "error");
+        const failedText = status.bulk ? "Finished, but some rows failed." : "The run failed.";
+        say(status.status === "complete" ? "Finished." : failedText, status.status === "complete" ? "ok" : "error");
         await loadResults(jobId);
       }
     }
@@ -294,11 +510,24 @@
       badge.textContent = BADGE_TEXT[status.status] || status.status;
       badge.className = "badge " + status.status;
 
-      const total = status.steps_total;
-      const done = status.steps_completed;
+      const bulk = status.bulk;
+      $("dry-run-note").hidden = !status.dry_run;
+      $("steps-wrap").hidden = Boolean(bulk);
+      $("failed-rows-wrap").hidden = !(bulk && bulk.failed_rows.length);
+
+      const total = bulk ? bulk.rows_total : status.steps_total;
+      const done = bulk ? bulk.rows_done : status.steps_completed;
       $("progress").value = total ? Math.round((done / total) * 100) : 0;
       let text = "";
-      if (status.current_step) {
+      if (bulk && status.done && status.summary) {
+        text = done + " of " + total + " rows done, " + bulk.rows_failed + " failed. Finished in "
+          + formatDuration(status.summary.duration_ms);
+      } else if (bulk && bulk.current_row) {
+        text = "Row " + bulk.current_row.index + " of " + total + (bulk.current_row.label ? " (" + bulk.current_row.label + ")" : "")
+          + " - " + done + " done, " + bulk.rows_failed + " failed";
+      } else if (bulk && total) {
+        text = done + " of " + total + " rows done, " + bulk.rows_failed + " failed";
+      } else if (status.current_step) {
         text = "Step " + status.current_step.index + (total ? " of " + total : "") + ": " + status.current_step.name;
       } else if (status.done && status.summary) {
         text = "Finished in " + formatDuration(status.summary.duration_ms);
@@ -306,6 +535,15 @@
         text = done + " of " + total + " steps done";
       }
       $("progress-text").textContent = text;
+
+      $("failed-rows-body").replaceChildren(...(bulk ? bulk.failed_rows : []).map((failed) => {
+        const row = el("tr");
+        row.appendChild(el("td", {}, String(failed.row)));
+        row.appendChild(el("td", {}, failed.label || ""));
+        row.appendChild(el("td", {}, failed.step || ""));
+        row.appendChild(el("td", {}, failed.error || ""));
+        return row;
+      }));
 
       const failureBox = $("failure-box");
       const problem = status.failure
@@ -360,9 +598,106 @@
       $("results-card").hidden = false;
     }
 
+    function saySchedule(text, kind) {
+      const message = $("schedule-message");
+      message.textContent = text;
+      message.className = "hint " + (kind || "");
+      message.style.whiteSpace = "pre-line";
+      if (kind === "error") message.style.color = "var(--bad)";
+      else if (kind === "ok") message.style.color = "var(--ok)";
+      else message.style.color = "";
+    }
+
+    function formatMoment(iso) {
+      if (!iso) return "-";
+      const moment = new Date(iso);
+      return Number.isNaN(moment.getTime()) ? iso : moment.toLocaleString([], { dateStyle: "medium", timeStyle: "short" });
+    }
+
+    function describeLastRun(schedule) {
+      if (schedule.last_error) return "Not started: " + schedule.last_error;
+      if (!schedule.last_run_at) return "Not run yet";
+      const status = schedule.last_status ? " (" + schedule.last_status + ")" : "";
+      return formatMoment(schedule.last_run_at) + status;
+    }
+
+    async function changeSchedule(schedule, action) {
+      try {
+        if (action === "delete") {
+          await api("/schedules/" + encodeURIComponent(schedule.id), { method: "DELETE" });
+        } else {
+          await api("/schedules/" + encodeURIComponent(schedule.id) + "/" + action, { method: "POST" });
+        }
+        saySchedule("", "");
+      } catch (error) {
+        saySchedule(error.message, "error");
+      }
+      await loadSchedules();
+    }
+
+    async function loadSchedules() {
+      let data;
+      try {
+        data = await api("/schedules");
+      } catch (error) {
+        saySchedule(error.message, "error");
+        return;
+      }
+      $("schedule-empty").hidden = data.schedules.length > 0;
+      $("schedule-wrap").hidden = data.schedules.length === 0;
+      $("schedule-body").replaceChildren(...data.schedules.map((schedule) => {
+        const row = el("tr");
+        row.appendChild(el("td", {}, schedule.recipe_name + (schedule.has_data ? " (with data sheet)" : "")));
+        row.appendChild(el("td", {}, schedule.when + (schedule.timezone !== "local" ? " (" + schedule.timezone + ")" : "")));
+        row.appendChild(el("td", {}, schedule.enabled ? formatMoment(schedule.next_run) : "Paused"));
+        row.appendChild(el("td", {}, describeLastRun(schedule)));
+        const actions = el("td");
+        const toggle = el("button", { type: "button" }, schedule.enabled ? "Pause" : "Resume");
+        toggle.addEventListener("click", () => changeSchedule(schedule, schedule.enabled ? "pause" : "resume"));
+        const remove = el("button", { type: "button" }, "Delete");
+        remove.addEventListener("click", () => changeSchedule(schedule, "delete"));
+        actions.append(toggle, " ", remove);
+        row.appendChild(actions);
+        return row;
+      }));
+      if (!data.running) saySchedule("The scheduler is not running, so nothing will start automatically.", "error");
+    }
+
+    async function addSchedule() {
+      const recipe = selectedRecipe();
+      if (!recipe) { saySchedule("Choose a recipe above first.", "error"); return; }
+      const when = $("schedule-when").value.trim();
+      if (!when) { saySchedule("Say when to run, for example: daily 08:00", "error"); return; }
+      const form = new FormData();
+      form.append("recipe_name", recipe.name);
+      form.append("when", when);
+      form.append("timezone", $("schedule-tz").value.trim() || "local");
+      const file = $("schedule-file").files[0];
+      if (file) form.append("file", file);
+      try {
+        const created = await api("/schedules", { method: "POST", body: form });
+        saySchedule("Scheduled '" + created.recipe_name + "' (" + created.when + "). Next run: " + formatMoment(created.next_run) + ".", "ok");
+        $("schedule-when").value = "";
+        $("schedule-file").value = "";
+      } catch (error) {
+        saySchedule(error.message, "error");
+        return;
+      }
+      await loadSchedules();
+    }
+
+    $("schedule-btn").addEventListener("click", addSchedule);
+    setInterval(loadSchedules, 30000);
+    loadSchedules();
+
     $("upload-btn").addEventListener("click", uploadRecipe);
     $("run-btn").addEventListener("click", runRecipe);
-    $("recipe-select").addEventListener("change", () => { $("run-btn").disabled = !$("recipe-select").value; });
+    $("recipe-select").addEventListener("change", () => {
+      $("run-btn").disabled = !$("recipe-select").value;
+      showRecipeControls();
+    });
+    $("data-mode").addEventListener("change", showDataMode);
+    $("data-file").addEventListener("change", () => previewSheet(null));
     loadRecipes().catch((error) => say(error.message, "error"));
   </script>
 </body>

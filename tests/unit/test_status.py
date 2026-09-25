@@ -70,6 +70,8 @@ def test_pending_job_shape() -> None:
         "warnings": [],
         "summary": None,
         "error": None,
+        "dry_run": False,
+        "bulk": None,
     }
 
 

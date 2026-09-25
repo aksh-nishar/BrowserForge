@@ -179,6 +179,9 @@ def test_list_returns_saved_recipes_sorted_with_details(client: TestClient) -> N
         "error": None,
         "url": "https://x.io",
         "steps": 2,
+        "placeholders": [],
+        "env_vars": [],
+        "has_submit": False,
     }
     assert recipes[1]["steps"] == 1  # a recipe with no steps still opens its start page
 

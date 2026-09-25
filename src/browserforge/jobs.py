@@ -6,7 +6,7 @@ JobStore is thread-safe: the job runs in a worker thread while the API reads its
 import copy
 import threading
 import uuid
-from collections.abc import Callable
+from collections.abc import Callable, Mapping, Sequence
 from contextlib import AbstractContextManager
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -17,6 +17,7 @@ from typing import Any
 import structlog
 from structlog.contextvars import bound_contextvars
 
+from browserforge.engine.bulk import BulkResult, RowResult, run_bulk
 from browserforge.engine.driver import DriverError, PageDriver
 from browserforge.engine.errors import classify, humanize
 from browserforge.engine.recipe import Recipe, Step
@@ -54,6 +55,11 @@ class JobRecord:
     steps: list[StepLog] = field(default_factory=list)
     run_log: RunLog | None = None
     error: str | None = None
+    dry_run: bool = False  # a test run: stops before the step marked `submit: true`
+    rows_total: int | None = None  # set for bulk runs (one recipe run per data row)
+    current_row: dict[str, Any] | None = None
+    row_results: list[RowResult] = field(default_factory=list)
+    bulk_result: BulkResult | None = None
 
 
 class JobStore:
@@ -71,10 +77,15 @@ class JobStore:
         except KeyError:
             raise JobNotFoundError(f"Job '{job_id}' not found") from None
 
-    def create(self, recipe_name: str) -> JobRecord:
+    def create(self, recipe_name: str, *, dry_run: bool = False) -> JobRecord:
         with self._lock:
             job_id = uuid.uuid4().hex[:12]
-            record = JobRecord(job_id=job_id, recipe_name=recipe_name, created_at=self._stamp())
+            record = JobRecord(
+                job_id=job_id,
+                recipe_name=recipe_name,
+                created_at=self._stamp(),
+                dry_run=dry_run,
+            )
             self._jobs[job_id] = record
             return copy.deepcopy(record)
 
@@ -125,6 +136,30 @@ class JobStore:
             record.status = COMPLETE if run_log.success else FAILED
             record.finished_at = self._stamp()
 
+    def row_started(self, job_id: str, index: int, total: int, label: str) -> None:
+        with self._lock:
+            record = self._get(job_id)
+            record.rows_total = total
+            record.current_row = {"index": index, "label": label}
+
+    def row_finished(self, job_id: str, row_result: RowResult) -> None:
+        with self._lock:
+            record = self._get(job_id)
+            record.row_results.append(row_result)
+            record.current_row = None
+            record.current_step = None
+
+    def mark_bulk_finished(self, job_id: str, bulk_result: BulkResult) -> None:
+        """A bulk run ended: complete if every row succeeded, otherwise failed."""
+        with self._lock:
+            record = self._get(job_id)
+            self._require_running(record)
+            record.bulk_result = bulk_result
+            record.current_row = None
+            record.current_step = None
+            record.status = COMPLETE if bulk_result.success else FAILED
+            record.finished_at = self._stamp()
+
     def mark_failed(self, job_id: str, error: str) -> None:
         """The job could not run at all (for example the browser failed to start)."""
         with self._lock:
@@ -132,6 +167,7 @@ class JobStore:
             self._require_running(record)
             record.error = error
             record.current_step = None
+            record.current_row = None
             record.status = FAILED
             record.finished_at = self._stamp()
 
@@ -194,6 +230,18 @@ def build_status(record: JobRecord) -> dict[str, Any]:
             "skipped": run_log.skipped_steps,
             "output_file": Path(run_log.output_file).name if run_log.output_file else None,
         }
+    bulk = build_bulk_status(record)
+    if done and record.bulk_result is not None:
+        bulk_result = record.bulk_result
+        summary = {
+            "success": bulk_result.success,
+            "duration_ms": bulk_result.duration_ms,
+            "steps_run": 0,
+            "skipped": 0,
+            "rows_total": bulk_result.total,
+            "rows_failed": bulk_result.failed,
+            "output_file": Path(bulk_result.output_file).name if bulk_result.output_file else None,
+        }
 
     return {
         "job_id": record.job_id,
@@ -213,6 +261,28 @@ def build_status(record: JobRecord) -> dict[str, Any]:
         "warnings": warnings,
         "summary": summary,
         "error": record.error,
+        "dry_run": record.dry_run,
+        "bulk": bulk,
+    }
+
+
+MAX_FAILED_ROWS_SHOWN = 50
+
+
+def build_bulk_status(record: JobRecord) -> dict[str, Any] | None:
+    """Row-level progress of a bulk run (None for an ordinary single run)."""
+    if record.rows_total is None:
+        return None
+    failed = [row for row in record.row_results if not row.success]
+    return {
+        "rows_total": record.rows_total,
+        "rows_done": len(record.row_results),
+        "rows_failed": len(failed),
+        "current_row": record.current_row,
+        "failed_rows": [
+            {"row": row.row, "label": row.label, "step": row.failed_step, "error": row.error}
+            for row in failed[:MAX_FAILED_ROWS_SHOWN]
+        ],
     }
 
 
@@ -237,6 +307,9 @@ def run_job(
     recipe_name: str,
     job_dir: Path,
     driver_factory: DriverFactory,
+    *,
+    secrets: Sequence[str] = (),
+    dry_run: bool = False,
 ) -> None:
     """Body of the background task. Runs the recipe, keeping the store up to date. Never raises."""
     with bound_contextvars(job_id=job_id, recipe=recipe_name):
@@ -251,12 +324,53 @@ def run_job(
                     recipe_name=recipe_name,
                     on_step_start=partial(store.step_started, job_id),
                     on_step_end=partial(store.step_finished, job_id),
+                    secrets=secrets,
+                    dry_run=dry_run,
                 )
         except Exception as exc:
-            logger.exception("job_crashed")
-            try:
-                store.mark_failed(job_id, _crash_message(exc))
-            except (JobNotFoundError, JobStateError):
-                logger.exception("job_state_update_failed")
+            _fail_job(store, job_id, exc)
             return
         store.mark_finished(job_id, run_log)
+
+
+def _fail_job(store: JobStore, job_id: str, exc: Exception) -> None:
+    logger.exception("job_crashed")
+    try:
+        store.mark_failed(job_id, _crash_message(exc))
+    except (JobNotFoundError, JobStateError):
+        logger.exception("job_state_update_failed")
+
+
+def run_bulk_job(
+    store: JobStore,
+    job_id: str,
+    recipe: Recipe,
+    rows: Sequence[Mapping[str, str]],
+    recipe_name: str,
+    job_dir: Path,
+    driver_factory: DriverFactory,
+    *,
+    environ: Mapping[str, str] | None = None,
+    dry_run: bool = False,
+) -> None:
+    """Background task for a bulk run: one recipe run per data row. Never raises."""
+    with bound_contextvars(job_id=job_id, recipe=recipe_name):
+        try:
+            store.mark_running(job_id)
+            result = run_bulk(
+                recipe,
+                rows,
+                driver_factory,
+                job_dir,
+                job_id=job_id,
+                recipe_name=recipe_name,
+                environ=environ,
+                dry_run=dry_run,
+                on_row_start=partial(store.row_started, job_id),
+                on_row_end=partial(store.row_finished, job_id),
+                on_step_start=partial(store.step_started, job_id),
+            )
+        except Exception as exc:
+            _fail_job(store, job_id, exc)
+            return
+        store.mark_bulk_finished(job_id, result)
