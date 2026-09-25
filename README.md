@@ -1,83 +1,242 @@
 # BrowserForge
 
-Browser automation with a dashboard. You describe a job once in a small YAML file (a
-**recipe**): log in, fill forms, upload and download files, scrape tables across pages. Then
-anyone can run it from a web page and get back **screenshots, an Excel report and a
-step-by-step log**.
+**Browser automation you can run from a button.** Describe a repetitive website task once in a
+short YAML file. Anyone can then run it from a web dashboard and get back an Excel report,
+screenshots of what happened, and a step-by-step log.
 
-One reusable engine plus a recipe per site. A new client portal is a new YAML file, not new code.
+![BrowserForge dashboard after a successful run: step table, Excel download, screenshots](docs/images/dashboard-run.png)
 
-```
-recipe.yaml  ->  [ Run ]  ->  jobs/<id>/
-                              |- output.xlsx        scraped tables, one sheet per table step
-                              |- screenshots/       a photo trail, plus one when a step fails
-                              |- downloads/         files the recipe downloaded
-                              `- run_log.json       every step, result, timing and retry
-```
+<sub>A real run of [`example_login_scrape.yaml`](recipes/example_login_scrape.yaml) against a public practice site.
+The amber notice is intentional: the recipe caps the scrape at 3 pages, and the tool says so instead of
+quietly returning partial data.</sub>
 
-## Quick start
+![Python 3.13+](https://img.shields.io/badge/python-3.13%2B-blue)
+![Playwright](https://img.shields.io/badge/browser-Playwright%20%2B%20Chromium-2ead33)
+![FastAPI](https://img.shields.io/badge/dashboard-FastAPI-009688)
+![Tests](https://img.shields.io/badge/tests-700%2B%20passing-brightgreen)
+![Types](https://img.shields.io/badge/mypy-strict-blue)
+![Lint](https://img.shields.io/badge/lint-ruff-orange)
 
-Everything is managed with [uv](https://docs.astral.sh/uv/) (dependencies, Python, tests,
-running the app). There is no `pip` and no `requirements.txt`.
+---
 
-```
-# 1. install uv once (Windows PowerShell; on macOS/Linux: curl -LsSf https://astral.sh/uv/install.sh | sh)
-powershell -c "irm https://astral.sh/uv/install.ps1 | iex"
+## What problem does this solve?
 
-# 2. from the project folder
-uv sync                                # installs Python packages exactly as locked
-uv run playwright install chromium     # downloads the browser (once per machine)
+Many businesses have people doing the same thing in a web portal every day or week: logging in,
+clicking through to a report, downloading a file, copying a table into Excel, or typing the same
+data into a form. It is slow, easy to get wrong, and leaves no record of what was done.
 
-# 3. start the dashboard
-uv run browserforge
-```
+BrowserForge automates that kind of work:
 
-Open <http://127.0.0.1:8000>.
+- **A recipe per site, not a script per task.** A recipe lists the steps (open, log in, fill,
+  click, download, scrape, screenshot). Changing a value or adding a step is editing text, not
+  programming.
+- **Run by someone non-technical.** Pick a recipe, press **Run**, watch progress, download the
+  result.
+- **Evidence for every run.** Each run leaves an Excel file, a screenshot trail and a JSON log
+  with every step, its result and how long it took. If something fails you see which step and why,
+  in plain language, with a screenshot of the page at that moment.
 
-Options: `--port 9000`, `--recipes-dir`, `--jobs-dir`, `--json-logs` (JSON lines, also written
-to `logs/app.log`), `--reload` (restart on code changes). `uv run browserforge --help` lists them.
+### Where it fits
 
-> **Run it from the project folder.** Relative paths in recipes (such as an upload file) are
-> resolved from where you start BrowserForge.
+It suits tasks that are **repetitive, rule-based, and done through a website that has no usable
+API**. These are typical use cases for this approach (a guide to where it fits, not a list of past
+clients):
 
-## Using the dashboard
+| Kind of task | What the automation does |
+|---|---|
+| HR / payroll portals | Log in, download the monthly attendance or payslip files, save them by date |
+| Government or partner portals | Fill the same form for many records, screenshot each confirmation page |
+| CRM or admin panels | Bulk-update records from a list instead of clicking through each one |
+| Internal dashboards | Pull a report on a schedule you choose to run it, export to Excel |
+| Repetitive data entry | Type the same fields into a web form from a spreadsheet |
+| Public data collection | Read tables across many pages into one Excel file (where the site's terms allow it) |
 
-1. **Choose a recipe.** Pick one from the list, or upload your own `.yaml` file. A recipe that
-   is not valid is rejected with a plain message saying what to fix.
-2. **Click Run.** The status panel updates every 2 seconds: which step is running, a progress
-   bar, and a table of finished steps with their timing.
-3. **Get the results.** When the run ends you get a download link for the Excel report,
-   any downloaded files, the run log, and a gallery of screenshots. If a step fails, its
-   error is shown in plain language, and a **failure screenshot** shows the page at that moment.
+### When it is *not* the right tool
 
-## Writing a recipe
+Being clear about this saves you money:
+
+- If the system has a proper **API or a data export**, use that. It is more reliable than driving a browser.
+- Sites protected by **captchas** are out of scope; the tool does not try to bypass them.
+- Tasks that need **human judgement** at each step are not good automation candidates.
+- Browser automation depends on how a page is built. **If a site redesigns its pages, the recipe
+  needs updating.** That is normal maintenance for this kind of automation, not a defect.
+
+### The time-saving arithmetic
+
+This is arithmetic, not a promise. If someone spends **30 minutes a day** on a portal task, that is
+about **125 hours over 250 working days**. Your numbers will differ. The sensible first step is to
+measure how long the manual task takes now, and how often it happens, before deciding whether
+automating it is worth it. Tasks that are short and rare usually are not.
+
+---
+
+## See it work
+
+A failed run reports what went wrong in plain language and keeps a screenshot of the page at
+that moment. Here the recipe uses a wrong password:
+
+![BrowserForge dashboard after a failed login: plain-language error and a failure screenshot](docs/images/dashboard-failure.png)
+
+<sub>The screenshot in the Results panel is the real login page showing the site's own error banner.
+The technical detail (raw error, attempts, timings) is kept separately in `run_log.json`.</sub>
+
+A 2-minute walkthrough for showing it to someone else is in [`docs/DEMO.md`](docs/DEMO.md).
+
+## A recipe in 30 seconds
 
 ```yaml
-url: https://portal.example.com/login      # opened first
-retries: 2                                 # optional: retry slow steps (0-10, default 0)
-backoff_seconds: 1                         # optional: wait 1s, then 2s, then 4s between retries
-continue_on_error: false                   # optional: true = keep going after a failed step
+url: https://portal.example.com/login
+retries: 2                               # retry slow steps; a rejected login is never retried
 
-login:                                     # optional: runs right after the URL opens
+login:
   username_selector: "#username"
   password_selector: "#password"
   submit_selector: "button[type=submit]"
   username: alice
   password: s3cret
-  success_url_contains: /dashboard         # and/or success_selector: "#welcome"
+  success_url_contains: /dashboard
 
 steps:
   - type: click
-    name: open_reports                     # optional: shown in the log and screenshot names
+    name: open_reports
     selector: "a.reports"
-  - type: paginate
-    name: Invoices                         # becomes the sheet name in output.xlsx
+
+  - type: paginate                       # read a table across pages into one sheet
+    name: Invoices
     selector: table.invoices
     next_selector: 'a[aria-label="Next"]'
     max_pages: 10
+
+  - type: screenshot
+    name: last_page
 ```
 
-Every step has a `type`, may have a `name`, and may override `retries` / `backoff_seconds`.
+Twelve step types cover the common cases: `goto`, `fill`, `click`, `select_option`, `check`,
+`login`, `upload`, `download`, `screenshot`, `extract_table`, `paginate`, `wait_for_selector`.
+Full reference [below](#writing-recipes).
+
+## How a run works
+
+```mermaid
+flowchart LR
+    R[Recipe YAML] --> V[Validate]
+    V --> J[Runner]
+    J --> A[Step actions]
+    A --> D[PageDriver interface]
+    D --> C[Chromium via Playwright]
+    J --> O1[output.xlsx]
+    J --> O2[screenshots/]
+    J --> O3[run_log.json]
+    J --> S[Live status]
+    S --> UI[Dashboard]
+```
+
+Every job gets its own folder:
+
+```
+jobs/<id>/
+  output.xlsx       scraped tables, one sheet per table step
+  screenshots/      a photo trail, plus one automatic screenshot when a step fails
+  downloads/        files the recipe downloaded
+  run_log.json      every step: result, timing, attempts, raw and plain-language error
+```
+
+---
+
+## How it is built
+
+This section is for anyone reviewing the code. Everything listed is in the repository and covered
+by tests.
+
+**Architecture**
+- The engine talks to the browser only through a small `PageDriver` interface. All logic
+  (recipes, actions, retries, pagination, Excel export) runs against a **fake driver in unit
+  tests**, so they finish in seconds without a browser. The real `PlaywrightDriver` is the single
+  module that imports Playwright.
+- Pure functions for data shaping (`table_extract`, `pagination`, `excel_export`), kept separate
+  from side effects so they are easy to test and reason about.
+- A FastAPI app that contains routes only; job state, status building and file lookup live in
+  their own modules.
+
+**Reliability**
+- **Retries with back-off, but only for temporary failures.** A slow page is retried; a bad recipe
+  setting or a **rejected login is never retried**, so a wrong password cannot lock an account.
+- **Bounded pagination.** A `max_pages` cap stops a site whose "Next" button never ends, and the
+  result is flagged as truncated so partial data is never mistaken for complete data.
+- **Best-effort failure screenshots.** If the screenshot itself fails, the original error is still
+  the one reported.
+- Each job runs in its own worker thread with its own browser.
+
+**Security**
+- Scraped text is written to Excel as text, so a cell like `=HYPERLINK(...)` from a website cannot
+  become a live formula.
+- File-serving routes resolve every path and refuse anything outside the job folder (tests cover
+  `..`, encoded traversal, absolute paths and symlinks).
+- The dashboard inserts server text as plain text only, never as HTML; a test in a real browser
+  confirms markup in a step name does not run.
+- Passwords are redacted from error messages and never written to logs or `run_log.json`.
+- Uploaded recipes are validated, size-limited and stored under sanitised names; `recipes/` is
+  git-ignored except the examples.
+
+**Testing: 700+ automated tests**
+- **Unit tests** (fast, no browser or network) cover the engine, API, job store and status shapes.
+- **Integration tests** drive real Chromium: the driver against a local test website, the whole
+  dashboard in a browser, and the two example recipes on public practice sites (skipped
+  automatically when offline).
+- They have caught real bugs. One example: on a real site, a page that loaded slowly looked like a
+  short table with no "Next" link, so pagination stopped early with partial data. It was
+  reproduced with a deliberately slow test page, fixed in the driver, and now has a regression
+  test.
+
+**Tooling**
+- Everything is managed with [`uv`](https://docs.astral.sh/uv/): dependencies, the lockfile, the
+  Python version, running tests and the app. No `pip`, no `requirements.txt`.
+- `ruff` for lint and formatting, `mypy --strict` for types, structured logging with `structlog`
+  (each log line carries the job id).
+
+| Area | Tools |
+|---|---|
+| Language | Python 3.13 |
+| Browser automation | Playwright (Chromium) |
+| Dashboard / API | FastAPI, Uvicorn, plain HTML/JS (no front-end framework, no external assets) |
+| Data / Excel | openpyxl, PyYAML |
+| Logging | structlog (console or JSON lines, rotating file) |
+| Quality | pytest, ruff, mypy (strict), uv |
+
+---
+
+## Quick start
+
+```
+# install uv once (Windows PowerShell; macOS/Linux: curl -LsSf https://astral.sh/uv/install.sh | sh)
+powershell -c "irm https://astral.sh/uv/install.ps1 | iex"
+
+uv sync                                # install dependencies exactly as locked
+uv run playwright install chromium     # download the browser (once per machine)
+uv run browserforge                    # start the dashboard
+```
+
+Open <http://127.0.0.1:8000>. Options: `--port`, `--recipes-dir`, `--jobs-dir`, `--json-logs`,
+`--reload` (see `uv run browserforge --help`). Start it from the project folder, because relative
+paths in recipes (such as an upload file) are resolved from there.
+
+> Developed and tested on Windows 11. The tooling is cross-platform, but I have not run it on
+> macOS or Linux.
+
+**Using the dashboard:** choose or upload a recipe, press **Run**, watch the step table update
+every 2 seconds, then download the Excel report and open the screenshots. Invalid recipes are
+rejected with a message saying what to fix.
+
+<a id="writing-recipes"></a>
+<details>
+<summary><strong>Writing recipes: full reference</strong></summary>
+
+Top-level settings: `url` (required, opened first), `login` (optional), `steps`, `retries`
+(0-10, default 0), `backoff_seconds` (wait 1s, 2s, 4s... between retries, default 1),
+`continue_on_error` (default `false`: stop at the first failed step).
+
+Every step has a `type`, may have a `name` (used in the log, screenshot file names and Excel sheet
+names), and may override `retries` / `backoff_seconds`.
 
 | `type` | What it does | Settings |
 |---|---|---|
@@ -86,141 +245,110 @@ Every step has a `type`, may have a `name`, and may override `retries` / `backof
 | `click` | Click an element | `selector` |
 | `select_option` | Choose from a dropdown | `selector`, `value` |
 | `check` | Tick a checkbox | `selector` |
-| `login` | Fill credentials, submit, wait for the logged-in page | as in the `login:` block above; optional `timeout_ms` |
+| `login` | Fill credentials, submit, wait for the logged-in page | as in the `login:` block; optional `timeout_ms` |
 | `upload` | Attach file(s) to a file input | `selector`, `files` (one path or a list) |
-| `download` | Click something that starts a download, save the file | `selector`, optional `save_as` |
+| `download` | Click something that starts a download and save the file | `selector`, optional `save_as` |
 | `screenshot` | Save a PNG (whole page, or one element) | optional `selector`, `full_page` |
 | `extract_table` | Read one table into the Excel report | `selector`, optional `has_header` |
 | `paginate` | Read a table across pages by clicking "Next" | `selector`, `next_selector`, optional `max_pages` (default 50), `has_header` |
 | `wait_for_selector` | Wait until an element appears | `selector`, optional `timeout_ms` |
 
-Good to know:
+Notes:
+- **Selectors** are CSS selectors. Right-click an element, choose *Inspect*, and copy a short,
+  stable one (an `id` is best). `uvx playwright codegen <url>` records clicks and shows the
+  selectors Playwright would use.
+- **Missing upload files fail immediately**, naming the file, before the browser is touched.
+- **Recipes hold passwords in plain text.** The dashboard has no login and is meant to run on your
+  own machine (it listens on `127.0.0.1` by default). Do not expose it to a network.
 
-- **Selectors** are CSS selectors. To find one, open the page, right-click the element,
-  *Inspect*, and copy a short, stable selector (an `id` beats a long chain).
-- **Retries** apply only to problems that may be temporary (slow pages, elements not there
-  yet). Bad recipe settings and **rejected logins are never retried**, so a wrong password
-  can't lock an account.
-- **`paginate` has a safety cap.** If a site never runs out of pages, `max_pages` stops it. When
-  the cap cuts a scrape short, the dashboard shows a warning so nobody mistakes partial data
-  for complete data.
-- **Missing upload files fail immediately** with the file name, before the browser is touched.
-- **Recipes hold passwords in plain text.** Uploaded recipes are stored in `recipes/`, which
-  git ignores (only `example_*.yaml` is tracked). There is no login on the dashboard, so keep
-  it on your own machine (the default `127.0.0.1`) and do not expose it to a network.
+Example recipes, both runnable against public practice sites with no setup:
+[`example_login_scrape.yaml`](recipes/example_login_scrape.yaml) (log in, paginated scrape, Excel)
+and [`example_form_fill.yaml`](recipes/example_form_fill.yaml) (fill, dropdown, checkbox, upload).
 
-### Example recipes
+</details>
 
-Both run against public practice websites, so they work with no setup:
-
-- [`recipes/example_login_scrape.yaml`](recipes/example_login_scrape.yaml): log in, scrape a
-  paginated table, screenshots, Excel report.
-- [`recipes/example_form_fill.yaml`](recipes/example_form_fill.yaml): fill a field, pick a
-  dropdown option, tick a checkbox, upload a file.
-
-## Tests
+<details>
+<summary><strong>Running the tests, managing dependencies, project layout</strong></summary>
 
 ```
-uv run pytest                        # unit tests: no browser, no network, seconds
-uv run pytest -m integration         # real Chromium against real pages (slower)
+uv run pytest                            # unit tests: no browser, no network
+uv run pytest -m integration             # real Chromium (needs the browser installed)
 uv run pytest -m "unit or integration"   # everything
-uv run pytest tests/unit/test_retry.py -v          # one file
-uv run pytest -k "login and not integration" -v    # tests matching a keyword
+uv run ruff check .   &&   uv run ruff format --check .   &&   uv run mypy src tests
 ```
 
-- **Unit tests** run the whole engine against a fake browser, so they are fast and exact. They
-  are what you run on every change.
-- **Integration tests** drive real Chromium: the driver on a local test website, the dashboard
-  in a browser, and the two example recipes on public sites. The tests that need the public
-  sites **skip themselves when you are offline**.
-
-Quality checks:
-
 ```
-uv run ruff check .          # lint
-uv run ruff format .         # format
-uv run mypy src tests        # types (strict)
+uv add <package>                # add a runtime dependency (uv add --group dev <p> for dev-only)
+uv remove <package>
+uv lock --upgrade && uv sync    # upgrade within version limits
 ```
-
-## Managing dependencies
-
-Only uv. Never edit `uv.lock` by hand.
-
-```
-uv add <package>                    # add a runtime dependency
-uv add --group dev <package>        # add a dev-only dependency (tests, linting)
-uv remove <package>                 # remove one
-uv lock --upgrade && uv sync        # upgrade everything within version limits
-uv run playwright install chromium  # re-run after upgrading playwright
-```
-
-Run one-off tools that are not project dependencies with `uvx`, for example
-`uvx playwright codegen https://your-portal.example.com` to record clicks and see the
-selectors Playwright would use while you draft a recipe.
-
-## Project layout
 
 ```
 src/browserforge/
-  app.py            FastAPI routes only (recipes, jobs, status, results, files)
-  jobs.py           in-memory job store, status JSON, background job body
-  results.py        list a job's files as URLs; safe file lookup
-  cli.py            `uv run browserforge`
-  logging_config.py structlog setup (console or JSON, rotating file)
-  templates/dashboard.html   the whole UI
+  app.py               FastAPI routes only
+  jobs.py              in-memory job store, status JSON, background job body
+  results.py           list a job's files as URLs; safe file lookup
+  cli.py               `uv run browserforge`
+  logging_config.py    structlog setup
+  templates/dashboard.html
   engine/
-    recipe.py       YAML -> validated Recipe
-    runner.py       runs steps, retries, failure screenshots, run_log.json, Excel
-    actions.py      one function per step type
-    driver.py       PageDriver interface + PlaywrightDriver (the ONLY module using playwright)
-    errors.py       failure kinds and plain-language messages
-    pagination.py   "is there a next page?" + capped loop
-    table_extract.py, excel_export.py   pure data shaping
-recipes/            example recipes (and your uploads)
-tests/unit/         fast tests against a fake driver
-tests/integration/  real browser tests
+    recipe.py          YAML -> validated Recipe
+    runner.py          runs steps; retries, failure screenshots, run_log.json, Excel
+    actions.py         one function per step type
+    driver.py          PageDriver interface + PlaywrightDriver (only module using playwright)
+    errors.py          failure kinds and plain-language messages
+    pagination.py, table_extract.py, excel_export.py
+recipes/               example recipes (and dashboard uploads, git-ignored)
+tests/unit/            fast tests against a fake driver
+tests/integration/     real browser tests
 ```
 
-The engine only ever talks to the `PageDriver` interface, so all logic is tested against a fake
-driver in milliseconds and the real Playwright driver is one small, separately tested layer.
+</details>
 
-## Troubleshooting
+<details>
+<summary><strong>Troubleshooting</strong></summary>
 
 | Symptom | Fix |
 |---|---|
 | "The browser is not installed on this computer" | `uv run playwright install chromium` |
-| "Couldn't find or use '#x' within 30 seconds" | The selector is wrong or the page changed. Check it in the browser's inspector, or add a `wait_for_selector` step before it. |
-| "The page address never changed to what was expected" after a login | Wrong credentials, or the site sends you somewhere else. Check `success_url_contains` / `success_selector`. |
-| A scrape ends early with a warning | `max_pages` was reached. Raise it. |
-| Nothing was saved from a `download` step | The click did not start a download. Check the selector, or that the site does not open the file in a new tab. |
+| "Couldn't find or use '#x' within 30 seconds" | The selector is wrong or the page changed. Check it in the browser inspector, or add a `wait_for_selector` step first. |
+| "The page address never changed to what was expected" after a login | Wrong credentials, or the site redirects elsewhere. Check `success_url_contains` / `success_selector`. |
+| A scrape ends with a "cut off" warning | `max_pages` was reached. Raise it. |
 | The Excel report could not be saved | `output.xlsx` is open in Excel. Close it and run again. |
 
-Technical details of any failure are in `jobs/<id>/run_log.json` (raw error, error kind,
-attempts, retry history), and in the server log.
+Technical detail for any failure is in `jobs/<id>/run_log.json` and the server log.
 
-## 2-minute client demo
+</details>
 
-Goal: show that a non-technical person can run a browser job from a button and get evidence.
+---
 
-**Before the call (once):** `uv sync`, `uv run playwright install chromium`, then
-`uv run browserforge` and open <http://127.0.0.1:8000>. Do one dry run so the browser is warm.
+## Scope and limitations
 
-| Time | Do | Say |
-|---|---|---|
-| 0:00 | Show the dashboard. Open `recipes/example_login_scrape.yaml` in an editor for 10 seconds. | "This is the whole automation: a short text file. Your portal's steps go here once, and I never touch code to change a field value." |
-| 0:20 | Select **example_login_scrape**, click **Run**. | "Your team clicks Run. That's it." |
-| 0:30 | Watch the progress bar and the step table fill in. | "Each step is timed and logged as it happens. Nothing is a black box." |
-| 0:50 | When it says **Complete**, open the screenshot gallery. | "Here's the photo trail: what the page looked like after login and of the table." |
-| 1:05 | Click **Download Excel report**, open it. | "Every page of that table, merged, with a header. Ready for your finance team." |
-| 1:25 | Point at the yellow warning about the page limit. | "It's careful: if it ever cuts a scrape short, it tells you rather than silently giving partial data." |
-| 1:40 | Upload `example_form_fill`, run it, or show a failed run. | "And when something breaks, you get plain English and a screenshot of the failure, not a stack trace." |
-| 1:55 | Close. | "Adding your portal is a new recipe. Scheduled nightly runs and hosting are the next phase." |
+Stated plainly, so expectations are right:
 
-**Follow-up phase to offer:** scheduled runs (for example nightly), emailing the report, hosting
-on the client's server, and a no-code recipe builder.
+- **Single-user, local tool.** No user accounts or login on the dashboard.
+- **Job history is in memory.** After a restart the dashboard forgets past runs, although their
+  files remain in `jobs/`.
+- **No scheduling, email reports or Docker packaging yet.** Runs start from the dashboard. These
+  are natural next steps, not part of this version.
+- **Chromium only.** No captcha solving. No visual recipe builder; recipes are written as YAML.
+- **Sites change.** Recipes need updating when a site's layout changes.
+- **Use it responsibly.** Automate only accounts and sites you are authorised to use, and respect
+  their terms of service.
 
-## What is not included
+## Working with me
 
-This version is deliberately small: a single-user local tool. There is no user login or
-multi-user dashboard, no job queue (jobs run in-process, one browser per job), no captcha
-solving, and no scheduling, email reports or Docker packaging.
+I build and maintain automations like this for specific websites and workflows: writing and testing
+the recipe for your portal, delivering it as this dashboard or as scripts, and updating it when the
+site changes.
+
+A typical engagement:
+
+1. **You describe the task** and how often it runs, and share a test account (never a production
+   password over email or chat).
+2. **I check it is a good fit** and estimate the effort honestly, including when the answer is
+   "use the API instead" or "this is not worth automating".
+3. **I build and test the recipe**, and show you a real run with the screenshots and log.
+4. **Handover**, with the recipe, instructions, and an agreed way to handle changes to the site.
+
+To get in touch, message me on GitHub: [@aksh-nishar](https://github.com/aksh-nishar).
