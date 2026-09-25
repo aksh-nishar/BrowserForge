@@ -18,6 +18,7 @@ from typing import Any
 import structlog
 
 from browserforge.engine.driver import DriverError, DriverTimeoutError, PageDriver
+from browserforge.engine.errors import ErrorKind, classify
 from browserforge.engine.pagination import DEFAULT_MAX_PAGES, paginate_and_collect
 from browserforge.engine.recipe import Step
 from browserforge.engine.table_extract import extract_table
@@ -32,6 +33,7 @@ class ActionResult:
     success: bool
     error: str | None = None
     data: dict[str, Any] = field(default_factory=dict)
+    error_kind: ErrorKind | None = None  # None: config/login errors, already plain language
 
 
 @dataclass(frozen=True)
@@ -47,8 +49,12 @@ def _label(step: Step) -> str:
     return f"Step '{step.name or step.type}'"
 
 
-def _fail(step: Step, message: str) -> ActionResult:
-    return ActionResult(success=False, error=f"{_label(step)}: {message}")
+def _fail(step: Step, message: str, kind: ErrorKind | None = None) -> ActionResult:
+    return ActionResult(success=False, error=f"{_label(step)}: {message}", error_kind=kind)
+
+
+def _fail_driver(step: Step, exc: DriverError) -> ActionResult:
+    return _fail(step, str(exc), classify(exc))
 
 
 def _selector_of(step: Step) -> str | None:
@@ -78,7 +84,7 @@ def _run(
     try:
         call(selector, value)
     except DriverError as exc:
-        return _fail(step, str(exc))
+        return _fail_driver(step, exc)
     return ActionResult(success=True)
 
 
@@ -89,7 +95,7 @@ def do_goto(driver: PageDriver, step: Step) -> ActionResult:
     try:
         driver.goto(url)
     except DriverError as exc:
-        return _fail(step, str(exc))
+        return _fail_driver(step, exc)
     return ActionResult(success=True)
 
 
@@ -145,7 +151,7 @@ def do_upload(driver: PageDriver, step: Step) -> ActionResult:
     try:
         driver.upload(selector, items)
     except DriverError as exc:
-        return _fail(step, str(exc))
+        return _fail_driver(step, exc)
     return ActionResult(success=True)
 
 
@@ -180,9 +186,11 @@ def do_download(driver: PageDriver, step: Step, ctx: ActionContext) -> ActionRes
         driver.click(selector)
         downloaded = Path(driver.wait_for_download())
     except DriverTimeoutError:
-        return _fail(step, "no download started after the click (timed out waiting for it)")
+        return _fail(
+            step, "no download started after the click (timed out waiting for it)", "download"
+        )
     except DriverError as exc:
-        return _fail(step, str(exc))
+        return _fail_driver(step, exc)
 
     if not downloaded.is_file():
         return _fail(step, f"the browser reported a download but the file is missing: {downloaded}")
@@ -202,11 +210,11 @@ def _safe_name(text: str) -> str:
     return re.sub(r"[^A-Za-z0-9_-]+", "_", text).strip("_") or "step"
 
 
-def screenshot_path(ctx: ActionContext, step: Step) -> Path:
-    """job_dir/screenshots/<index>_<step name>_<YYYYmmdd-HHMMSS>.png"""
+def screenshot_path(ctx: ActionContext, step: Step, prefix: str = "") -> Path:
+    """job_dir/screenshots/<prefix><index>_<step name>_<YYYYmmdd-HHMMSS>.png"""
     stamp = ctx.now().strftime("%Y%m%d-%H%M%S")
     name = _safe_name(step.name or step.type)
-    return ctx.job_dir / "screenshots" / f"{ctx.step_index:02d}_{name}_{stamp}.png"
+    return ctx.job_dir / "screenshots" / f"{prefix}{ctx.step_index:02d}_{name}_{stamp}.png"
 
 
 def do_screenshot(driver: PageDriver, step: Step, ctx: ActionContext) -> ActionResult:
@@ -224,7 +232,7 @@ def do_screenshot(driver: PageDriver, step: Step, ctx: ActionContext) -> ActionR
         path.parent.mkdir(parents=True, exist_ok=True)
         driver.screenshot(str(path), selector=selector, full_page=full_page)
     except DriverError as exc:
-        return _fail(step, str(exc))
+        return _fail_driver(step, exc)
     except OSError as exc:
         return _fail(step, f"could not create the screenshots folder: {exc}")
     return ActionResult(success=True, data={"path": str(path)})
@@ -248,7 +256,7 @@ def do_extract_table(driver: PageDriver, step: Step) -> ActionResult:
     try:
         raw = driver.get_table_rows(selector)
     except DriverError as exc:
-        return _fail(step, str(exc))
+        return _fail_driver(step, exc)
     return ActionResult(success=True, data={"rows": extract_table(raw, has_header)})
 
 
@@ -274,7 +282,7 @@ def do_paginate(driver: PageDriver, step: Step) -> ActionResult:
     try:
         collected = paginate_and_collect(driver, selector, next_selector, max_pages, has_header)
     except DriverError as exc:
-        return _fail(step, str(exc))
+        return _fail_driver(step, exc)
 
     if collected.hit_cap:
         logger.warning("pagination_cap_reached", step=step.name or step.type, max_pages=max_pages)

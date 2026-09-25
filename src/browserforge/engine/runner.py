@@ -33,6 +33,7 @@ from browserforge.engine.actions import (
     do_wait_for_selector,
 )
 from browserforge.engine.driver import PageDriver
+from browserforge.engine.errors import RETRYABLE_KINDS
 from browserforge.engine.excel_export import build_workbook, save_workbook
 from browserforge.engine.recipe import Recipe, Step
 
@@ -71,6 +72,8 @@ class StepLog:
     error: str | None
     duration_ms: int
     data: dict[str, Any] = field(default_factory=dict)
+    attempts: int = 1
+    retry_errors: list[str] = field(default_factory=list)  # raw error of each failed earlier try
 
 
 @dataclass
@@ -109,7 +112,41 @@ def execute_step(driver: PageDriver, step: Step, ctx: ActionContext) -> ActionRe
         return ActionResult(
             success=False,
             error=f"{label}: unexpected error ({type(exc).__name__}): {exc}",
+            error_kind="unexpected",
         )
+
+
+def _run_with_retries(
+    driver: PageDriver,
+    step: Step,
+    ctx: ActionContext,
+    retries: int,
+    backoff_seconds: float,
+    sleep: Callable[[float], None],
+) -> tuple[ActionResult, int, list[str]]:
+    """Run a step, retrying transient failures up to `retries` extra times.
+
+    Waits backoff_seconds * 2**(n-1) before retry n. Only failures worth repeating are
+    retried (see RETRYABLE_KINDS); bad config, wrong passwords and bugs fail at once.
+    Returns (final result, attempts used, error text of each failed attempt before the last).
+    """
+    earlier_errors: list[str] = []
+    attempt = 1
+    while True:
+        result = execute_step(driver, step, ctx)
+        retryable = result.error_kind in RETRYABLE_KINDS
+        if result.success or not retryable or attempt > retries:
+            return result, attempt, earlier_errors
+        earlier_errors.append(result.error or "")
+        logger.warning(
+            "step_retry",
+            step_type=step.type,
+            attempt=attempt,
+            max_attempts=retries + 1,
+            error=result.error,
+        )
+        sleep(backoff_seconds * 2 ** (attempt - 1))
+        attempt += 1
 
 
 def _loggable_data(data: dict[str, Any]) -> dict[str, Any]:
@@ -145,11 +182,13 @@ def run_recipe(
     now: Callable[[], datetime] = datetime.now,
     on_step_start: Callable[[int, int, Step], None] | None = None,
     on_step_end: Callable[[StepLog], None] | None = None,
+    sleep: Callable[[float], None] = time.sleep,
 ) -> RunLog:
     """Run `recipe` on `driver`, writing run_log.json (and output.xlsx) into `job_dir`.
 
     `on_step_start(index, total, step)` and `on_step_end(step_log)` report live progress;
-    a callback that raises is logged and ignored, it never breaks the run.
+    a callback that raises is logged and ignored, it never breaks the run. `sleep` is
+    injectable so retry back-off can be tested without waiting.
     """
     job_path = Path(job_dir)
     job_id = job_id or job_path.name
@@ -170,7 +209,13 @@ def run_recipe(
         for index, step in enumerate(steps, start=1):
             _notify(on_step_start, index, len(steps), step)
             step_clock = time.perf_counter()
-            result = execute_step(driver, step, ActionContext(job_path, index, now))
+            retries = step.retries if step.retries is not None else recipe.retries
+            backoff = (
+                step.backoff_seconds if step.backoff_seconds is not None else recipe.backoff_seconds
+            )
+            result, attempts, retry_errors = _run_with_retries(
+                driver, step, ActionContext(job_path, index, now), retries, backoff, sleep
+            )
             duration_ms = int((time.perf_counter() - step_clock) * 1000)
 
             step_log = StepLog(
@@ -181,6 +226,8 @@ def run_recipe(
                 error=result.error,
                 duration_ms=duration_ms,
                 data=_loggable_data(result.data),
+                attempts=attempts,
+                retry_errors=retry_errors,
             )
             run_log.steps.append(step_log)
             _notify(on_step_end, step_log)

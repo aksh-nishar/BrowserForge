@@ -6,13 +6,14 @@ from typing import Any
 
 import structlog
 from fastapi import BackgroundTasks, FastAPI, HTTPException, Request, UploadFile
-from fastapi.responses import HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel, Field
 
 from browserforge.engine.driver import playwright_driver
 from browserforge.engine.recipe import RecipeValidationError, load_recipe, parse_recipe_text
 from browserforge.jobs import DriverFactory, JobNotFoundError, JobStore, run_job
+from browserforge.results import list_results, resolve_job_file
 
 logger = structlog.get_logger(__name__)
 
@@ -151,6 +152,27 @@ def create_app(
             driver_factory,
         )
         return {"job_id": record.job_id, "status": record.status}
+
+    def _require_job(job_id: str) -> Path:
+        if not job_store.exists(job_id):
+            raise HTTPException(404, f"Job '{job_id}' not found")
+        return jobs_dir / job_id
+
+    @app.get("/jobs/{job_id}/results")
+    def job_results(job_id: str) -> dict[str, Any]:
+        job_dir = _require_job(job_id)
+        if not job_dir.is_dir():
+            raise HTTPException(404, f"Job '{job_id}' has no results yet")
+        return list_results(job_id, job_dir)
+
+    @app.get("/jobs/{job_id}/files/{file_path:path}")
+    def job_file(job_id: str, file_path: str) -> FileResponse:
+        target = resolve_job_file(_require_job(job_id), file_path)
+        if target is None:
+            raise HTTPException(404, "File not found")
+        if target.suffix.lower() == ".png":
+            return FileResponse(target)  # shown inline in the gallery
+        return FileResponse(target, filename=target.name)  # everything else downloads
 
     @app.get("/status/{job_id}")
     def job_status(job_id: str) -> dict[str, Any]:

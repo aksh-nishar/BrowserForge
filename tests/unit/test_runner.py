@@ -129,7 +129,17 @@ def test_run_log_json_is_written_with_expected_structure(job_dir: Path) -> None:
     assert data["output_file"] is None
     assert [s["type"] for s in data["steps"]] == ["goto", "click"]
     first = data["steps"][0]
-    assert set(first) == {"index", "type", "name", "success", "error", "duration_ms", "data"}
+    assert set(first) == {
+        "index",
+        "type",
+        "name",
+        "success",
+        "error",
+        "duration_ms",
+        "data",
+        "attempts",
+        "retry_errors",
+    }
     assert first["name"] == "open_start_page"
     assert isinstance(first["duration_ms"], int)
     assert first["duration_ms"] >= 0

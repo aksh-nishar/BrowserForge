@@ -4,9 +4,366 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>BrowserForge</title>
+  <style>
+    :root {
+      --bg: #f5f6f8;
+      --card: #ffffff;
+      --text: #1b1f27;
+      --muted: #5c6470;
+      --line: #d9dde3;
+      --accent: #2456d6;
+      --accent-text: #ffffff;
+      --ok: #147a3d;
+      --ok-bg: #e2f5ea;
+      --bad: #b3261e;
+      --bad-bg: #fbe7e5;
+      --run: #8a5a00;
+      --run-bg: #fdf0d3;
+      --idle-bg: #e8eaee;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: #14171c;
+        --card: #1e222a;
+        --text: #e8ebf0;
+        --muted: #9aa3b0;
+        --line: #333a45;
+        --accent: #6f95ff;
+        --accent-text: #0d1220;
+        --ok: #62d68f;
+        --ok-bg: #16301f;
+        --bad: #ff8a80;
+        --bad-bg: #3a1c1a;
+        --run: #ffc861;
+        --run-bg: #3a2e12;
+        --idle-bg: #2b303a;
+      }
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      font: 16px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    }
+    header, main { max-width: 960px; margin: 0 auto; padding: 0 16px; }
+    header { padding-top: 24px; }
+    h1 { margin: 0; font-size: 1.6rem; }
+    h2 { margin: 0 0 12px; font-size: 1.1rem; }
+    .tagline { margin: 4px 0 20px; color: var(--muted); }
+    .card {
+      background: var(--card);
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      padding: 16px;
+      margin-bottom: 16px;
+    }
+    .row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin-bottom: 12px; }
+    .row label { min-width: 160px; font-weight: 600; }
+    input[type="file"], select {
+      flex: 1 1 220px;
+      min-width: 0;
+      padding: 8px;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: var(--bg);
+      color: var(--text);
+      font: inherit;
+    }
+    button {
+      padding: 8px 16px;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: var(--card);
+      color: var(--text);
+      font: inherit;
+      cursor: pointer;
+    }
+    button.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-text); font-weight: 600; }
+    button:disabled { opacity: 0.55; cursor: not-allowed; }
+    button:focus-visible, input:focus-visible, select:focus-visible, a:focus-visible {
+      outline: 3px solid var(--accent);
+      outline-offset: 2px;
+    }
+    #message { min-height: 1.5em; margin: 4px 0 0; }
+    #message.error { color: var(--bad); }
+    #message.ok { color: var(--ok); }
+    .status-line { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin-bottom: 8px; }
+    .badge { padding: 2px 12px; border-radius: 999px; font-weight: 600; background: var(--idle-bg); }
+    .badge.running { background: var(--run-bg); color: var(--run); }
+    .badge.complete { background: var(--ok-bg); color: var(--ok); }
+    .badge.failed { background: var(--bad-bg); color: var(--bad); }
+    progress { width: 100%; height: 10px; margin-bottom: 12px; }
+    .notice { padding: 10px 12px; border-radius: 6px; margin: 8px 0; }
+    .notice.error { background: var(--bad-bg); color: var(--bad); }
+    .notice.warn { background: var(--run-bg); color: var(--run); }
+    .table-wrap { overflow-x: auto; }
+    table { width: 100%; border-collapse: collapse; }
+    th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
+    th { color: var(--muted); font-weight: 600; font-size: 0.85rem; }
+    td.result.ok { color: var(--ok); font-weight: 600; }
+    td.result.bad { color: var(--bad); font-weight: 600; }
+    #downloads { display: flex; flex-wrap: wrap; gap: 8px 16px; margin-bottom: 16px; }
+    #downloads a { color: var(--accent); font-weight: 600; }
+    #gallery { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 12px; }
+    #gallery figure { margin: 0; }
+    #gallery img { width: 100%; height: 140px; object-fit: cover; object-position: top;
+      border: 1px solid var(--line); border-radius: 6px; background: var(--idle-bg); }
+    #gallery figcaption { font-size: 0.8rem; color: var(--muted); word-break: break-all; }
+    #gallery figcaption.failure { color: var(--bad); font-weight: 600; }
+    .empty { color: var(--muted); }
+    [hidden] { display: none !important; }
+  </style>
 </head>
 <body>
-  <h1>BrowserForge</h1>
-  <p>Dashboard placeholder — replaced in Task 2.5.</p>
+  <header>
+    <h1>BrowserForge</h1>
+    <p class="tagline">Run a browser automation from a recipe and get screenshots and an Excel report.</p>
+  </header>
+
+  <main>
+    <section class="card" aria-labelledby="h-recipe">
+      <h2 id="h-recipe">1. Choose a recipe</h2>
+      <div class="row">
+        <label for="recipe-file">Upload a recipe (.yaml)</label>
+        <input type="file" id="recipe-file" accept=".yaml,.yml">
+        <button type="button" id="upload-btn">Upload</button>
+      </div>
+      <div class="row">
+        <label for="recipe-select">Recipe to run</label>
+        <select id="recipe-select"></select>
+        <button type="button" id="run-btn" class="primary" disabled>Run</button>
+      </div>
+      <p id="message" role="status" aria-live="polite"></p>
+    </section>
+
+    <section class="card" id="status-card" aria-labelledby="h-status" hidden>
+      <h2 id="h-status">2. Run status</h2>
+      <div class="status-line">
+        <span id="status-badge" class="badge">Pending</span>
+        <span id="progress-text"></span>
+      </div>
+      <progress id="progress" max="100" value="0" aria-label="Run progress"></progress>
+      <div id="failure-box" class="notice error" role="alert" hidden></div>
+      <div id="warnings"></div>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr><th>#</th><th>Step</th><th>Result</th><th>Time</th><th>Details</th></tr>
+          </thead>
+          <tbody id="steps-body"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="card" id="results-card" aria-labelledby="h-results" hidden>
+      <h2 id="h-results">3. Results</h2>
+      <div id="downloads"></div>
+      <div id="gallery"></div>
+      <p id="no-results" class="empty" hidden>This run produced no files.</p>
+    </section>
+  </main>
+
+  <script>
+    "use strict";
+    const POLL_MS = 2000;
+    const $ = (id) => document.getElementById(id);
+    let pollTimer = null;
+    let pollFailures = 0;
+
+    // Everything from the server is untrusted text (recipe names, error messages, step names,
+    // scraped data), so it is only ever inserted with textContent / setAttribute, never as markup.
+    function el(tag, props, text) {
+      const node = document.createElement(tag);
+      if (props) for (const [key, value] of Object.entries(props)) node.setAttribute(key, value);
+      if (text !== undefined) node.textContent = text;
+      return node;
+    }
+
+    async function api(path, options) {
+      const response = await fetch(path, options);
+      let body = null;
+      try { body = await response.json(); } catch (_) { /* not JSON */ }
+      if (!response.ok) {
+        const detail = body && body.detail;
+        throw new Error(typeof detail === "string" ? detail : "Request failed (" + response.status + ")");
+      }
+      return body;
+    }
+
+    function say(text, kind) {
+      const message = $("message");
+      message.textContent = text;
+      message.className = kind || "";
+    }
+
+    function formatDuration(ms) {
+      return ms < 1000 ? ms + " ms" : (ms / 1000).toFixed(1) + " s";
+    }
+
+    async function loadRecipes(selectName) {
+      const data = await api("/recipes");
+      const select = $("recipe-select");
+      select.replaceChildren();
+      for (const recipe of data.recipes) {
+        const label = recipe.valid
+          ? recipe.name + " (" + recipe.steps + " steps)"
+          : recipe.name + " (invalid)";
+        const option = el("option", { value: recipe.name }, label);
+        if (!recipe.valid) option.disabled = true;
+        select.appendChild(option);
+      }
+      if (selectName) select.value = selectName;
+      if (select.selectedOptions.length && select.selectedOptions[0].disabled) select.value = "";
+      $("run-btn").disabled = !select.value;
+      if (!data.recipes.length) select.appendChild(el("option", { value: "" }, "No recipes yet - upload one"));
+    }
+
+    async function uploadRecipe() {
+      const input = $("recipe-file");
+      if (!input.files.length) { say("Choose a .yaml recipe file first.", "error"); return; }
+      const form = new FormData();
+      form.append("file", input.files[0]);
+      try {
+        const saved = await api("/recipes", { method: "POST", body: form });
+        say("Saved recipe '" + saved.name + "' (" + saved.steps + " steps).", "ok");
+        input.value = "";
+        await loadRecipes(saved.name);
+      } catch (error) {
+        say(error.message, "error");
+      }
+    }
+
+    async function runRecipe() {
+      const name = $("recipe-select").value;
+      if (!name) return;
+      $("run-btn").disabled = true;
+      $("results-card").hidden = true;
+      say("Starting...", "");
+      try {
+        const job = await api("/jobs", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ recipe_name: name }),
+        });
+        say("Job " + job.job_id + " started.", "ok");
+        $("status-card").hidden = false;
+        startPolling(job.job_id);
+      } catch (error) {
+        say(error.message, "error");
+        $("run-btn").disabled = false;
+      }
+    }
+
+    function startPolling(jobId) {
+      stopPolling();
+      pollFailures = 0;
+      poll(jobId);
+      pollTimer = setInterval(() => poll(jobId), POLL_MS);
+    }
+
+    function stopPolling() {
+      if (pollTimer !== null) clearInterval(pollTimer);
+      pollTimer = null;
+    }
+
+    async function poll(jobId) {
+      let status;
+      try {
+        status = await api("/status/" + encodeURIComponent(jobId));
+        pollFailures = 0;
+      } catch (error) {
+        pollFailures += 1;
+        say("Lost contact with the server (" + error.message + "). Retrying...", "error");
+        if (pollFailures >= 5) { stopPolling(); $("run-btn").disabled = false; }
+        return;
+      }
+      renderStatus(status);
+      if (status.done) {
+        stopPolling();
+        $("run-btn").disabled = !$("recipe-select").value;
+        say(status.status === "complete" ? "Finished." : "The run failed.", status.status === "complete" ? "ok" : "error");
+        await loadResults(jobId);
+      }
+    }
+
+    const BADGE_TEXT = { pending: "Pending", running: "Running", complete: "Complete", failed: "Failed" };
+
+    function renderStatus(status) {
+      const badge = $("status-badge");
+      badge.textContent = BADGE_TEXT[status.status] || status.status;
+      badge.className = "badge " + status.status;
+
+      const total = status.steps_total;
+      const done = status.steps_completed;
+      $("progress").value = total ? Math.round((done / total) * 100) : 0;
+      let text = "";
+      if (status.current_step) {
+        text = "Step " + status.current_step.index + (total ? " of " + total : "") + ": " + status.current_step.name;
+      } else if (status.done && status.summary) {
+        text = "Finished in " + formatDuration(status.summary.duration_ms);
+      } else if (total) {
+        text = done + " of " + total + " steps done";
+      }
+      $("progress-text").textContent = text;
+
+      const failureBox = $("failure-box");
+      const problem = status.failure
+        ? "Step " + status.failure.step_index + " (" + status.failure.step + ") failed: " + status.failure.error
+        : status.error;
+      failureBox.hidden = !problem;
+      failureBox.textContent = problem || "";
+
+      const warnings = $("warnings");
+      warnings.replaceChildren(...status.warnings.map((warning) => el("div", { class: "notice warn" }, warning)));
+
+      const body = $("steps-body");
+      body.replaceChildren(...status.steps.map((step) => {
+        const row = el("tr");
+        row.appendChild(el("td", {}, String(step.index)));
+        row.appendChild(el("td", {}, step.name));
+        row.appendChild(el("td", { class: "result " + (step.success ? "ok" : "bad") }, step.success ? "OK" : "Failed"));
+        row.appendChild(el("td", {}, formatDuration(step.duration_ms)));
+        row.appendChild(el("td", {}, step.error || ""));
+        return row;
+      }));
+    }
+
+    async function loadResults(jobId) {
+      let results;
+      try {
+        results = await api("/jobs/" + encodeURIComponent(jobId) + "/results");
+      } catch (error) {
+        say(error.message, "error");
+        return;
+      }
+      const downloads = $("downloads");
+      downloads.replaceChildren();
+      const addLink = (label, item) => downloads.appendChild(el("a", { href: item.url, download: item.name }, label));
+      if (results.excel) addLink("Download Excel report (" + results.excel.name + ")", results.excel);
+      for (const file of results.downloads) addLink("Downloaded file: " + file.name, file);
+      if (results.run_log) addLink("Run log (" + results.run_log.name + ")", results.run_log);
+
+      const gallery = $("gallery");
+      gallery.replaceChildren(...results.screenshots.map((shot) => {
+        const link = el("a", { href: shot.url, target: "_blank", rel: "noopener" });
+        link.appendChild(el("img", { src: shot.url, alt: shot.name, loading: "lazy" }));
+        const caption = el("figcaption", shot.failure ? { class: "failure" } : {},
+          (shot.failure ? "Failure screenshot: " : "") + shot.name);
+        const figure = el("figure");
+        figure.appendChild(link);
+        figure.appendChild(caption);
+        return figure;
+      }));
+
+      $("no-results").hidden = Boolean(results.excel || results.downloads.length || results.screenshots.length);
+      $("results-card").hidden = false;
+    }
+
+    $("upload-btn").addEventListener("click", uploadRecipe);
+    $("run-btn").addEventListener("click", runRecipe);
+    $("recipe-select").addEventListener("change", () => { $("run-btn").disabled = !$("recipe-select").value; });
+    loadRecipes().catch((error) => say(error.message, "error"));
+  </script>
 </body>
 </html>
