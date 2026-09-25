@@ -1,0 +1,56 @@
+[project]
+name = "browserforge"
+version = "0.1.0"
+description = "Config-driven browser automation dashboard: YAML recipes run by Playwright"
+readme = "README.md"
+authors = [
+    { name = "Aksh Nishar", email = "83901599+aksh-nishar@users.noreply.github.com" }
+]
+requires-python = ">=3.13"
+dependencies = [
+    "fastapi>=0.141.1",
+    "jinja2>=3.1.6",
+    "openpyxl>=3.1.5",
+    "pandas>=3.0.6",
+    "playwright>=1.63.0",
+    "python-multipart>=0.0.32",
+    "pyyaml>=6.0.3",
+    "structlog>=26.1.0",
+    "uvicorn>=0.54.0",
+]
+
+[project.scripts]
+browserforge = "browserforge:main"
+
+[build-system]
+requires = ["uv_build>=0.12.19,<0.13.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "mypy>=2.3.1",
+    "pytest>=9.1.1",
+    "pytest-mock>=3.15.1",
+    "pytest-playwright>=0.9.0",
+    "ruff>=0.16.9",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-m unit"
+markers = [
+    "unit: fast tests, no browser/network (default)",
+    "integration: real Playwright against real pages (run manually)",
+]
+
+[tool.ruff]
+line-length = 100
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP"]
+
+[tool.mypy]
+python_version = "3.13"
+strict = true
+mypy_path = "src"
