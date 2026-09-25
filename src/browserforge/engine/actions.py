@@ -309,7 +309,7 @@ _DEFAULT_LOGIN_TIMEOUT_MS = 30_000
 def _login_failed(reason: str, message: str) -> ActionResult:
     # Never log credentials: only the reason and the (already redacted) message.
     logger.warning("login_failed", reason=reason, error=message)
-    return ActionResult(success=False, error=message)
+    return ActionResult(success=False, error=message, error_kind="login")
 
 
 def do_login(driver: PageDriver, step: Step) -> ActionResult:

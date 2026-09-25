@@ -44,7 +44,7 @@ def test_valid_recipe_is_saved_and_reported(client: TestClient, recipes_dir: Pat
         "name": "demo",
         "saved": True,
         "replaced": False,
-        "steps": 1,
+        "steps": 2,  # what a run executes: the automatic start-page step + the one click
     }
     assert (recipes_dir / "demo.yaml").read_text(encoding="utf-8") == VALID
 
@@ -178,9 +178,29 @@ def test_list_returns_saved_recipes_sorted_with_details(client: TestClient) -> N
         "valid": True,
         "error": None,
         "url": "https://x.io",
-        "steps": 1,
+        "steps": 2,
     }
-    assert recipes[1]["steps"] == 0
+    assert recipes[1]["steps"] == 1  # a recipe with no steps still opens its start page
+
+
+def test_step_count_includes_the_automatic_start_page_and_login_steps(client: TestClient) -> None:
+    """The dropdown's "(N steps)" must match the rows the run's step table will show."""
+    with_login = (
+        "url: https://x.io\n"
+        "login:\n"
+        "  username_selector: '#u'\n"
+        "  password_selector: '#p'\n"
+        "  submit_selector: '#s'\n"
+        "  username: a\n"
+        "  password: b\n"
+        "  success_url_contains: /in\n"
+        "steps:\n"
+        "  - {type: click, selector: '#a'}\n"
+        "  - {type: click, selector: '#b'}\n"
+    )
+    saved = upload(client, "with_login.yaml", with_login).json()
+    listed = client.get("/recipes").json()["recipes"][0]
+    assert saved["steps"] == listed["steps"] == 4  # start page + login + the 2 clicks
 
 
 def test_list_reports_invalid_files_instead_of_crashing(

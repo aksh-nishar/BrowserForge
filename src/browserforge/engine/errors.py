@@ -14,6 +14,7 @@ ErrorKind = Literal[
     "navigation",  # the page could not be opened
     "url_wait",  # the page address never became what was expected
     "download",  # no download started, or it failed
+    "login",  # the login step failed (never retried: it could lock an account)
     "driver",  # any other browser problem
     "unexpected",  # not a browser problem at all: a bug
 ]
@@ -49,12 +50,18 @@ def classify(exc: BaseException) -> ErrorKind:
     return "unexpected"
 
 
+_ANY_MS = re.compile(r"(\d+)ms\b")
+_LOGIN_PREFIX = re.compile(r"^Login failed:\s*")
+
+
+def _format_seconds(ms: int) -> str:
+    seconds = ms / 1000
+    return f"{seconds:g} second{'' if seconds == 1 else 's'}"
+
+
 def _seconds(raw: str) -> str:
     match = _MS.search(raw)
-    if not match:
-        return "the time limit"
-    seconds = int(match.group(1)) / 1000
-    return f"{seconds:g} second{'' if seconds == 1 else 's'}"
+    return _format_seconds(int(match.group(1))) if match else "the time limit"
 
 
 def _target(raw: str) -> str:
@@ -97,6 +104,13 @@ def humanize(kind: ErrorKind | None, raw: str) -> str:
         )
     if kind == "download":
         return "Nothing was downloaded after the click, or the download failed."
+    if kind == "login":
+        # The dashboard already says "Step 2 (login) failed:", so drop the repeated "Login
+        # failed:" and show times in seconds.
+        text = _ANY_MS.sub(
+            lambda m: _format_seconds(int(m.group(1))), _LOGIN_PREFIX.sub("", detail)
+        )
+        return text[:1].upper() + text[1:]
     if kind == "driver":
         return f"The browser reported a problem: {detail}"
     return "Something unexpected went wrong. The details are saved in the run log."

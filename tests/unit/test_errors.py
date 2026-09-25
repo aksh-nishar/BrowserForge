@@ -153,6 +153,35 @@ def test_url_wait_message_shows_the_expected_address_fragment() -> None:
     assert "never changed" in text
 
 
+def test_login_message_drops_the_repeated_prefix_and_uses_seconds() -> None:
+    raw = (
+        "Login failed: the logged-in page did not appear within 30000ms. "
+        "Check the username and password."
+    )
+    assert humanize("login", raw) == (
+        "The logged-in page did not appear within 30 seconds. Check the username and password."
+    )
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        ("Login failed: Timed out after 1000ms waiting for '#u'", "Timed out after 1 second"),
+        ("Login failed: Timed out after 2500ms waiting for '#u'", "Timed out after 2.5 seconds"),
+        ("login went wrong", "Login went wrong"),
+        ("Login failed: could not type *** into field", "Could not type *** into field"),
+        ("Login failed:", ""),
+    ],
+)
+def test_login_message_variants(raw: str, expected: str) -> None:
+    assert humanize("login", raw).startswith(expected)
+
+
+def test_login_is_a_declared_kind_and_never_retryable() -> None:
+    assert "login" in get_args(ErrorKind)
+    assert "login" not in RETRYABLE_KINDS
+
+
 def test_download_message() -> None:
     assert "Nothing was downloaded" in humanize("download", "No download started within 50ms")
 

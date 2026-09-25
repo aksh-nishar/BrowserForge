@@ -103,6 +103,11 @@ def _planned_steps(recipe: Recipe) -> list[Step]:
     return steps
 
 
+def total_steps(recipe: Recipe) -> int:
+    """How many steps a run executes: the recipe's own, plus the automatic start page and login."""
+    return len(_planned_steps(recipe))
+
+
 def execute_step(driver: PageDriver, step: Step, ctx: ActionContext) -> ActionResult:
     """Run one step. Never raises: unknown types and unexpected errors become failed results."""
     label = f"Step '{step.name or step.type}'"

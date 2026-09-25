@@ -14,6 +14,7 @@ from pydantic import BaseModel, Field
 from browserforge.cli import ENV_JOBS_DIR, ENV_JSON_LOGS, ENV_RECIPES_DIR
 from browserforge.engine.driver import playwright_driver
 from browserforge.engine.recipe import RecipeValidationError, load_recipe, parse_recipe_text
+from browserforge.engine.runner import total_steps
 from browserforge.jobs import DriverFactory, JobNotFoundError, JobStore, run_job
 from browserforge.logging_config import configure_logging
 from browserforge.results import list_results, resolve_job_file
@@ -122,8 +123,8 @@ def create_app(
         target = recipes_dir / f"{name}.yaml"
         replaced = target.exists()
         target.write_text(text, encoding="utf-8")
-        logger.info("recipe_saved", recipe=name, replaced=replaced, steps=len(recipe.steps))
-        return {"name": name, "saved": True, "replaced": replaced, "steps": len(recipe.steps)}
+        logger.info("recipe_saved", recipe=name, replaced=replaced, steps=total_steps(recipe))
+        return {"name": name, "saved": True, "replaced": replaced, "steps": total_steps(recipe)}
 
     @app.get("/recipes")
     def list_recipes() -> dict[str, Any]:
@@ -142,7 +143,7 @@ def create_app(
                         "valid": True,
                         "error": None,
                         "url": recipe.url,
-                        "steps": len(recipe.steps),
+                        "steps": total_steps(recipe),
                     }
                 )
         return {"recipes": entries}

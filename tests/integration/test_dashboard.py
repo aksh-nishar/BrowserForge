@@ -138,7 +138,8 @@ def test_full_flow_upload_run_watch_and_download(
 
     # the run log is offered too, and the recipe list shows the uploaded recipe
     expect(page.locator("#downloads a", has_text="Run log")).to_have_count(1)
-    expect(page.locator("#recipe-select option")).to_have_text(["employees (3 steps)"])
+    # "(N steps)" counts what a run executes, so it matches the rows in the step table
+    expect(page.locator("#recipe-select option")).to_have_text(["employees (5 steps)"])
 
 
 def test_wrong_password_shows_a_failed_run_with_a_plain_reason(
@@ -151,7 +152,11 @@ def test_wrong_password_shows_a_failed_run_with_a_plain_reason(
     expect(page.locator("#status-badge")).to_have_text("Failed", timeout=JOB_TIMEOUT_MS)
     failure = page.locator("#failure-box")
     expect(failure).to_be_visible()
-    expect(failure).to_contain_text("Login failed")
+    expect(failure).to_contain_text(
+        "Step 2 (login) failed: The logged-in page did not appear within 3 seconds."
+    )
+    expect(failure).not_to_contain_text("Login failed")  # no doubled "failed"
+    expect(failure).not_to_contain_text("ms")  # times are shown in seconds
     expect(failure).to_contain_text("username and password")
     expect(page.locator("#steps-body td.result.bad")).to_have_count(1)
     expect(page.locator("#run-btn")).to_be_enabled()  # can run again

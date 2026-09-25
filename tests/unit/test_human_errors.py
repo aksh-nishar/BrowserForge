@@ -84,7 +84,9 @@ def test_unknown_step_type_message(job_dir: Path) -> None:
     assert step.human_error == "unknown step type 'teleport'"
 
 
-def test_login_failure_message_is_passed_through(job_dir: Path) -> None:
+def test_login_failure_is_phrased_in_plain_seconds_without_repeating_login_failed(
+    job_dir: Path,
+) -> None:
     login = {
         "username_selector": "#u",
         "password_selector": "#p",
@@ -97,10 +99,19 @@ def test_login_failure_message_is_passed_through(job_dir: Path) -> None:
     fake.set_missing("#dash")
     log = run(Recipe(url="https://x.io", login=login), fake, job_dir)
     step = failed_step(log)
-    assert step.error_kind is None
-    assert step.human_error is not None
-    assert step.human_error.startswith("Login failed")
-    assert "username and password" in step.human_error
+    assert step.error_kind == "login"
+    # raw text is unchanged, for debugging
+    assert step.error == (
+        "Login failed: the logged-in page did not appear within 30000ms. "
+        "Check the username and password."
+    )
+    # the dashboard already says "Step 2 (login) failed:", so no second "Login failed:",
+    # and the wait is shown in seconds
+    assert step.human_error == (
+        "The logged-in page did not appear within 30 seconds. Check the username and password."
+    )
+    assert "Login failed" not in step.human_error
+    assert "ms" not in step.human_error
 
 
 def test_unmapped_crash_falls_back_to_a_generic_message_without_a_stack_trace(

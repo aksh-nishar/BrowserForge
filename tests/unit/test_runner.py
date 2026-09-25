@@ -8,7 +8,7 @@ from openpyxl import load_workbook
 
 from browserforge.engine.driver import DriverTimeoutError
 from browserforge.engine.recipe import STEP_TYPES, Recipe, Step
-from browserforge.engine.runner import HANDLERS, RunLog, run_recipe
+from browserforge.engine.runner import HANDLERS, RunLog, run_recipe, total_steps
 from fixtures.fake_driver import FakePageDriver
 
 URL = "https://portal.example.com"
@@ -434,6 +434,37 @@ def test_a_crashing_progress_callback_never_breaks_the_run(job_dir: Path) -> Non
 
 
 # ---- wiring ----
+
+
+LOGIN_BLOCK = {
+    "username_selector": "#u",
+    "password_selector": "#p",
+    "submit_selector": "#s",
+    "username": "tom",
+    "password": "pw",
+    "success_selector": "#dash",
+}
+
+
+@pytest.mark.parametrize(
+    ("steps", "login", "expected"),
+    [
+        (0, False, 1),  # just the start page
+        (3, False, 4),
+        (0, True, 2),  # start page + login
+        (3, True, 5),
+    ],
+)
+def test_total_steps_matches_the_rows_a_real_run_produces(
+    job_dir: Path, steps: int, login: bool, expected: int
+) -> None:
+    rec = recipe(
+        *[step("click", selector=f"#b{i}") for i in range(steps)],
+        login=LOGIN_BLOCK if login else None,
+    )
+    log, _ = run(rec, None, job_dir)
+    assert total_steps(rec) == expected
+    assert len(log.steps) == expected  # what the dashboard's "(N steps)" promises
 
 
 def test_every_recipe_step_type_has_a_handler() -> None:
