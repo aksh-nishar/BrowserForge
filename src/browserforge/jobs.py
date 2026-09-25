@@ -17,7 +17,8 @@ from typing import Any
 import structlog
 from structlog.contextvars import bound_contextvars
 
-from browserforge.engine.driver import PageDriver
+from browserforge.engine.driver import DriverError, PageDriver
+from browserforge.engine.errors import classify, humanize
 from browserforge.engine.recipe import Recipe, Step
 from browserforge.engine.runner import RunLog, StepLog, run_recipe
 
@@ -147,7 +148,8 @@ def _step_name(step: StepLog) -> str:
 
 
 def _step_message(step: StepLog) -> str | None:
-    return step.error
+    """What the dashboard shows: the plain-language message (raw text stays in run_log.json)."""
+    return step.human_error if step.human_error is not None else step.error
 
 
 def build_status(record: JobRecord) -> dict[str, Any]:
@@ -215,7 +217,17 @@ def build_status(record: JobRecord) -> dict[str, Any]:
 
 
 def _crash_message(exc: Exception) -> str:
-    return f"The job could not be run ({type(exc).__name__}): {exc}"
+    """Plain-language reason a job could not run at all. Never includes a stack trace."""
+    if "Executable doesn't exist" in str(exc):
+        return (
+            "The browser is not installed on this computer. Run: uv run playwright install chromium"
+        )
+    if isinstance(exc, DriverError):
+        return humanize(classify(exc), str(exc))
+    return (
+        "The job could not be started because of an unexpected problem. "
+        "The details are in the server log."
+    )
 
 
 def run_job(

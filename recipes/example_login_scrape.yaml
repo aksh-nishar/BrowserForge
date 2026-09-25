@@ -1,0 +1,42 @@
+# Example recipe A: log in, scrape a paginated table, keep screenshots and an Excel report.
+#
+# Runs against public practice sites, so you can try it with no setup:
+#   * the-internet.herokuapp.com/login   - demo login (these credentials are public)
+#   * scrapethissite.com/pages/forms/    - a 24-page hockey-teams table for scraping practice
+#
+# To adapt it to a client portal: change the URLs and selectors, keep the step types.
+
+url: https://the-internet.herokuapp.com/login
+
+# Retry slow steps up to 2 more times (waiting 1s, then 2s). A rejected login is never retried.
+retries: 2
+backoff_seconds: 1
+
+login:
+  username_selector: "#username"
+  password_selector: "#password"
+  submit_selector: "button[type=submit]"
+  username: tomsmith
+  password: SuperSecretPassword!
+  success_url_contains: /secure
+
+steps:
+  - type: screenshot
+    name: logged_in
+
+  # Start from page_num=1 explicitly: this site's landing page has a "Next" link that points
+  # back at page 1, so paginating from it would read the first page twice.
+  - type: goto
+    url: https://www.scrapethissite.com/pages/forms/?page_num=1
+
+  # Read the table on each page and click "Next" until there is none (or max_pages is hit).
+  # max_pages is a safety cap: if it cuts the scrape short, the dashboard shows a warning.
+  - type: paginate
+    name: Hockey_Teams
+    selector: table.table
+    next_selector: 'a[aria-label="Next"]'
+    max_pages: 3
+
+  - type: screenshot
+    name: last_page_table
+    selector: table.table

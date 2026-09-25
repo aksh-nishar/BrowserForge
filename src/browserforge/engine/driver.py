@@ -147,6 +147,11 @@ class PlaywrightDriver:
     def click(self, selector: str) -> None:
         with self._translated(f"'{selector}'"):
             self.page.click(selector)
+            # click() can return while a navigation it started is still streaming in, leaving
+            # a half-parsed page (a short table, no "Next" link yet). Wait for the document to
+            # finish parsing so whatever runs next sees the whole page. No-op when the click
+            # did not navigate.
+            self.page.wait_for_load_state("domcontentloaded")
 
     def select_option(self, selector: str, value: str) -> None:
         with self._translated(f"'{selector}'"):

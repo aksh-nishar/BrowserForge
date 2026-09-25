@@ -139,6 +139,9 @@ def test_run_log_json_is_written_with_expected_structure(job_dir: Path) -> None:
         "data",
         "attempts",
         "retry_errors",
+        "error_kind",
+        "human_error",
+        "failure_screenshot",
     }
     assert first["name"] == "open_start_page"
     assert isinstance(first["duration_ms"], int)

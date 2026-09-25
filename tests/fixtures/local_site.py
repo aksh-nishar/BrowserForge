@@ -1,10 +1,11 @@
 """A tiny local website for integration tests: deterministic, offline, no third-party server.
 
 Pages: /login (+ /secure), /table?page=N (3 pages), /table-endless, /download (+ file),
-/upload, /form, /delayed.
+/upload, /form, /delayed, /slow-table?page=N (3 pages that stream in slowly).
 """
 
 import threading
+import time
 from collections.abc import Iterator
 from contextlib import contextmanager
 from email import policy
@@ -27,6 +28,9 @@ EMPLOYEES = [
 PAGE_SIZE = 2
 LAST_PAGE = len(EMPLOYEES) // PAGE_SIZE
 CSV_BODY = "id,name\n1,Ann\n2,Bob\n"
+SLOW_LAST_PAGE = 3
+SLOW_ROWS = 4
+SLOW_PAUSE_SECONDS = 0.7
 
 
 def _html(title: str, body: str) -> str:
@@ -124,6 +128,37 @@ class _Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(data)
 
+    def _stream_slow_table(self, page: int) -> None:
+        """A table that arrives in two chunks, like a slow real site.
+
+        The first chunk holds the header and the first row; the rest (and the Next link)
+        follows after a pause. A reader that looks at the page too early sees a half-parsed
+        table with no Next link and wrongly concludes it is the last page.
+        """
+        rows = [(str(page * 10 + i), f"Row {page}.{i}") for i in range(1, SLOW_ROWS + 1)]
+
+        def cells(row: tuple[str, str]) -> str:
+            return f"<tr><td>{row[0]}</td><td>{row[1]}</td></tr>"
+
+        if page < SLOW_LAST_PAGE:
+            nxt = f'<a id="next" href="/slow-table?page={page + 1}">Next</a>'
+        else:
+            nxt = '<button id="next" disabled>Next</button>'
+        first = (
+            "<!doctype html><html><head><title>Slow</title></head><body>"
+            '<table id="slow"><thead><tr><th>ID</th><th>Name</th></tr></thead><tbody>'
+            + cells(rows[0])
+        )
+        rest = "".join(cells(row) for row in rows[1:]) + f"</tbody></table>{nxt}</body></html>"
+
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.end_headers()  # no Content-Length: the connection closing ends the body
+        self.wfile.write(first.encode("utf-8"))
+        self.wfile.flush()
+        time.sleep(SLOW_PAUSE_SECONDS)
+        self.wfile.write(rest.encode("utf-8"))
+
     def _redirect(self, location: str) -> None:
         self.send_response(302)
         self.send_header("Location", location)
@@ -155,6 +190,9 @@ class _Handler(BaseHTTPRequestHandler):
             self._send(FORM_PAGE)
         elif parsed.path == "/delayed":
             self._send(DELAYED_PAGE)
+        elif parsed.path == "/slow-table":
+            page = int(parse_qs(parsed.query).get("page", ["1"])[0])
+            self._stream_slow_table(min(max(page, 1), SLOW_LAST_PAGE))
         else:
             self._send(_html("Not found", "<h1>404</h1>"), status=404)
 

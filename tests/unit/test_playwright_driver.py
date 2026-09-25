@@ -91,6 +91,34 @@ def test_goto_fill_click_select_check_delegate_to_page(
     page.check.assert_called_once_with("#agree")
 
 
+def test_click_waits_for_the_document_to_finish_loading_after_clicking(
+    driver: PlaywrightDriver, page: MagicMock
+) -> None:
+    order: list[str] = []
+    page.click.side_effect = lambda *_a, **_k: order.append("click")
+    page.wait_for_load_state.side_effect = lambda *_a, **_k: order.append("wait")
+    driver.click("#next")
+    assert order == ["click", "wait"]
+    page.wait_for_load_state.assert_called_once_with("domcontentloaded")
+
+
+def test_no_load_wait_when_the_click_itself_fails(
+    driver: PlaywrightDriver, page: MagicMock
+) -> None:
+    page.click.side_effect = PlaywrightTimeoutError("t")
+    with pytest.raises(DriverTimeoutError):
+        driver.click("#next")
+    page.wait_for_load_state.assert_not_called()
+
+
+def test_a_page_that_never_finishes_parsing_is_a_timeout_error(
+    driver: PlaywrightDriver, page: MagicMock
+) -> None:
+    page.wait_for_load_state.side_effect = PlaywrightTimeoutError("t")
+    with pytest.raises(DriverTimeoutError, match="'#next'"):
+        driver.click("#next")
+
+
 def test_current_url_reads_the_page_url(driver: PlaywrightDriver, page: MagicMock) -> None:
     page.url = "https://x.io/secure"
     assert driver.current_url() == "https://x.io/secure"

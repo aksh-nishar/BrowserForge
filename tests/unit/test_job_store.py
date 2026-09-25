@@ -243,7 +243,9 @@ def test_run_job_never_raises_when_the_browser_cannot_start(
     job = store.get(job_id)
     assert job.status == FAILED
     assert job.error is not None
-    assert "chromium missing" in job.error
+    assert "unexpected problem" in job.error
+    assert "chromium missing" not in job.error  # internal details stay in the server log
+    assert "Traceback" not in job.error
 
 
 def test_run_job_closes_the_driver_context_even_after_a_crash(

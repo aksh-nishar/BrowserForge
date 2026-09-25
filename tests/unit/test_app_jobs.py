@@ -90,7 +90,8 @@ def test_a_browser_that_cannot_start_ends_as_failed_with_an_error(tmp_path: Path
     job_id = client.post("/jobs", json={"recipe_name": "demo"}).json()["job_id"]
     status = client.get(f"/status/{job_id}").json()
     assert status["status"] == "failed"
-    assert "no browser" in status["error"]
+    assert "unexpected problem" in status["error"]
+    assert "no browser" not in status["error"]  # internal details stay in the server log
 
 
 def test_each_request_creates_a_separate_job(env: Env) -> None:

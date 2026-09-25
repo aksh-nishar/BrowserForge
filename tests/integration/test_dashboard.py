@@ -153,6 +153,14 @@ def test_wrong_password_shows_a_failed_run_with_a_plain_reason(
     expect(page.locator("#steps-body td.result.bad")).to_have_count(1)
     expect(page.locator("#run-btn")).to_be_enabled()  # can run again
 
+    # the automatic failure screenshot is in the gallery, labelled, and really loads
+    expect(page.locator("#gallery figcaption.failure")).to_have_count(1)
+    expect(page.locator("#gallery figcaption.failure")).to_contain_text("Failure screenshot")
+    failure_image = page.locator("#gallery img").first
+    assert failure_image.evaluate("img => img.complete && img.naturalWidth > 0") is True
+    # and the message shown is the plain-language one, not the raw technical text
+    assert "Timed out after" not in (failure.text_content() or "")
+
 
 def test_invalid_recipe_upload_shows_the_validation_message(
     page: Page, live_app: LiveApp, tmp_path: Path

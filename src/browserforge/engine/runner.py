@@ -31,9 +31,10 @@ from browserforge.engine.actions import (
     do_select_option,
     do_upload,
     do_wait_for_selector,
+    screenshot_path,
 )
 from browserforge.engine.driver import PageDriver
-from browserforge.engine.errors import RETRYABLE_KINDS
+from browserforge.engine.errors import RETRYABLE_KINDS, humanize
 from browserforge.engine.excel_export import build_workbook, save_workbook
 from browserforge.engine.recipe import Recipe, Step
 
@@ -74,6 +75,9 @@ class StepLog:
     data: dict[str, Any] = field(default_factory=dict)
     attempts: int = 1
     retry_errors: list[str] = field(default_factory=list)  # raw error of each failed earlier try
+    error_kind: str | None = None  # see engine.errors.ErrorKind
+    human_error: str | None = None  # plain-language version of `error`, shown in the dashboard
+    failure_screenshot: str | None = None  # taken automatically when the step failed
 
 
 @dataclass
@@ -157,6 +161,23 @@ def _loggable_data(data: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _failure_screenshot(driver: PageDriver, step: Step, ctx: ActionContext) -> str | None:
+    """Best-effort screenshot of the page as it was when a step failed.
+
+    Never raises and never hides the original error: if the screenshot itself fails
+    (browser gone, disk full, ...) that is logged as a secondary problem and ignored.
+    """
+    path = screenshot_path(ctx, step, prefix="failure_")
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        driver.screenshot(str(path))
+    except Exception as exc:
+        logger.warning("failure_screenshot_failed", step_type=step.type, error=str(exc))
+        return None
+    logger.info("failure_screenshot", step_type=step.type, path=str(path))
+    return str(path)
+
+
 def _notify(callback: Callable[..., None] | None, *args: Any) -> None:
     if callback is None:
         return
@@ -213,9 +234,11 @@ def run_recipe(
             backoff = (
                 step.backoff_seconds if step.backoff_seconds is not None else recipe.backoff_seconds
             )
+            ctx = ActionContext(job_path, index, now)
             result, attempts, retry_errors = _run_with_retries(
-                driver, step, ActionContext(job_path, index, now), retries, backoff, sleep
+                driver, step, ctx, retries, backoff, sleep
             )
+            failure_shot = None if result.success else _failure_screenshot(driver, step, ctx)
             duration_ms = int((time.perf_counter() - step_clock) * 1000)
 
             step_log = StepLog(
@@ -228,6 +251,9 @@ def run_recipe(
                 data=_loggable_data(result.data),
                 attempts=attempts,
                 retry_errors=retry_errors,
+                error_kind=result.error_kind,
+                human_error=humanize(result.error_kind, result.error) if result.error else None,
+                failure_screenshot=failure_shot,
             )
             run_log.steps.append(step_log)
             _notify(on_step_end, step_log)
@@ -286,6 +312,10 @@ def _export_excel(run_log: RunLog, tables: dict[str, list[dict[str, Any]]], job_
                 success=False,
                 error=error,
                 duration_ms=0,
+                human_error=(
+                    "The Excel report could not be saved. If output.xlsx is open in another "
+                    "program, close it and run again."
+                ),
             )
         )
         return

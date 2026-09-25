@@ -9,6 +9,12 @@ wheels/
 # Virtual environments
 .venv
 
+# Recipes uploaded through the dashboard may contain real client credentials:
+# only the shipped examples (and their sample files) are tracked.
+recipes/*
+!recipes/example_*.yaml
+!recipes/assets/
+
 # Runtime output
 jobs/
 logs/

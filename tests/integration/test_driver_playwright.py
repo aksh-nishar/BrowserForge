@@ -118,6 +118,21 @@ def test_pagination_cap_stops_a_site_whose_next_never_disables(
     assert result.hit_cap is True
 
 
+def test_pagination_waits_for_a_next_page_that_loads_slowly(
+    driver: PlaywrightDriver, site: str
+) -> None:
+    """Regression: click() used to return while the new page was still half-parsed, so a slow
+    site's table looked short and its Next link missing: pagination stopped early with
+    silently partial data (seen on a real public site)."""
+    driver.goto(f"{site}/slow-table?page=1")
+    result = paginate_and_collect(driver, "#slow", "#next")
+    assert result.pages == 3
+    assert result.hit_cap is False
+    assert result.rows[0] == ["ID", "Name"]
+    assert len(result.rows) - 1 == 12  # 3 pages x 4 rows, none cut short
+    assert result.rows[-1] == ["34", "Row 3.4"]
+
+
 # ---- waiting ----
 
 
