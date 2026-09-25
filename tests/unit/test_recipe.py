@@ -8,6 +8,7 @@ from browserforge.engine.recipe import (
     Step,
     load_recipe,
     parse_recipe,
+    parse_recipe_text,
 )
 
 FIXTURES = Path(__file__).parent.parent / "fixtures"
@@ -113,6 +114,58 @@ def test_continue_on_error_defaults_to_false_and_can_be_enabled() -> None:
 def test_continue_on_error_must_be_a_boolean(bad: object) -> None:
     with pytest.raises(RecipeValidationError, match="continue_on_error"):
         parse_recipe({"url": "https://x.io", "continue_on_error": bad})
+
+
+def test_parse_recipe_text_builds_a_recipe_from_yaml_text() -> None:
+    recipe = parse_recipe_text("url: https://x.io\nsteps:\n  - type: click\n    selector: '#a'\n")
+    assert recipe.url == "https://x.io"
+    assert recipe.steps == [Step(type="click", config={"selector": "#a"})]
+
+
+def test_parse_recipe_text_names_the_source_in_yaml_errors() -> None:
+    with pytest.raises(RecipeValidationError, match=r"Invalid YAML in upload\.yaml"):
+        parse_recipe_text("url: [unclosed", "upload.yaml")
+
+
+def test_retry_settings_default_to_none_and_are_optional() -> None:
+    recipe = parse_recipe({"url": "https://x.io", "steps": [{"type": "click", "selector": "#a"}]})
+    assert (recipe.retries, recipe.backoff_seconds) == (0, 1.0)
+    assert (recipe.steps[0].retries, recipe.steps[0].backoff_seconds) == (None, None)
+
+
+def test_recipe_level_retry_settings_are_parsed() -> None:
+    recipe = parse_recipe({"url": "https://x.io", "retries": 3, "backoff_seconds": 0.5})
+    assert (recipe.retries, recipe.backoff_seconds) == (3, 0.5)
+
+
+def test_step_level_retry_settings_override_and_stay_out_of_the_config() -> None:
+    raw = {"type": "click", "selector": "#a", "retries": 2, "backoff_seconds": 4}
+    step = parse_recipe({"url": "https://x.io", "steps": [raw]}).steps[0]
+    assert (step.retries, step.backoff_seconds) == (2, 4.0)
+    assert step.config == {"selector": "#a"}
+
+
+@pytest.mark.parametrize("bad", [-1, 11, 1.5, "3", True, []])
+def test_invalid_retries_are_rejected(bad: object) -> None:
+    with pytest.raises(RecipeValidationError, match="retries"):
+        parse_recipe({"url": "https://x.io", "retries": bad})
+
+
+@pytest.mark.parametrize("bad", [-1, 61, "1s", True, []])
+def test_invalid_backoff_is_rejected(bad: object) -> None:
+    with pytest.raises(RecipeValidationError, match="backoff_seconds"):
+        parse_recipe({"url": "https://x.io", "backoff_seconds": bad})
+
+
+def test_invalid_step_retry_settings_name_the_step() -> None:
+    raw = {"type": "click", "selector": "#a", "retries": 99}
+    with pytest.raises(RecipeValidationError, match="Step 1.*retries"):
+        parse_recipe({"url": "https://x.io", "steps": [raw]})
+
+
+def test_zero_retries_and_zero_backoff_are_valid() -> None:
+    recipe = parse_recipe({"url": "https://x.io", "retries": 0, "backoff_seconds": 0})
+    assert (recipe.retries, recipe.backoff_seconds) == (0, 0.0)
 
 
 def test_step_name_and_config_split() -> None:

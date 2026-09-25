@@ -353,6 +353,73 @@ def test_excel_write_failure_is_recorded_and_run_log_still_written(job_dir: Path
     assert read_run_log(job_dir)["success"] is False
 
 
+# ---- progress callbacks (used by the job store for live status) ----
+
+
+def test_progress_callbacks_fire_in_order_for_every_step(job_dir: Path) -> None:
+    events: list[tuple[str, int, str]] = []
+    rec = recipe(step("click", name="a", selector="#a"), step("check", name="b", selector="#b"))
+    run(
+        rec,
+        None,
+        job_dir,
+        on_step_start=lambda i, total, s: events.append(
+            ("start", i, f"{total}:{s.name or s.type}")
+        ),
+        on_step_end=lambda log: events.append(("end", log.index, log.name or log.type)),
+    )
+    assert events == [
+        ("start", 1, "3:open_start_page"),
+        ("end", 1, "open_start_page"),
+        ("start", 2, "3:a"),
+        ("end", 2, "a"),
+        ("start", 3, "3:b"),
+        ("end", 3, "b"),
+    ]
+
+
+def test_end_callback_receives_the_failure_and_stops_follow_ups(job_dir: Path) -> None:
+    fake = FakePageDriver()
+    fake.set_missing("#a")
+    ended: list[bool] = []
+    run(
+        recipe(step("click", selector="#a"), step("click", selector="#b")),
+        fake,
+        job_dir,
+        on_step_end=lambda log: ended.append(log.success),
+    )
+    assert ended == [True, False]  # nothing reported for the skipped step
+
+
+def test_export_failure_is_reported_to_the_end_callback(job_dir: Path) -> None:
+    fake = FakePageDriver()
+    fake.set_table("#a", [["x"], ["1"]])
+    (job_dir / "output.xlsx").mkdir(parents=True)
+    ended: list[str] = []
+    run(
+        recipe(step("extract_table", selector="#a")),
+        fake,
+        job_dir,
+        on_step_end=lambda log: ended.append(log.type),
+    )
+    assert ended[-1] == "export_excel"
+
+
+def test_a_crashing_progress_callback_never_breaks_the_run(job_dir: Path) -> None:
+    def explode(*_args: object) -> None:
+        raise RuntimeError("callback bug")
+
+    log, fake = run(
+        recipe(step("click", selector="#a")),
+        None,
+        job_dir,
+        on_step_start=explode,
+        on_step_end=explode,
+    )
+    assert log.success is True
+    assert fake.clicks == ["#a"]
+
+
 # ---- wiring ----
 
 

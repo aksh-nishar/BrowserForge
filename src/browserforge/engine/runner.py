@@ -120,6 +120,15 @@ def _loggable_data(data: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _notify(callback: Callable[..., None] | None, *args: Any) -> None:
+    if callback is None:
+        return
+    try:
+        callback(*args)
+    except Exception:  # progress reporting must never break a run
+        logger.exception("progress_callback_failed")
+
+
 def _write_run_log(job_dir: Path, run_log: RunLog) -> None:
     job_dir.mkdir(parents=True, exist_ok=True)
     text = json.dumps(asdict(run_log), indent=2, ensure_ascii=False, default=str)
@@ -134,7 +143,14 @@ def run_recipe(
     job_id: str | None = None,
     recipe_name: str | None = None,
     now: Callable[[], datetime] = datetime.now,
+    on_step_start: Callable[[int, int, Step], None] | None = None,
+    on_step_end: Callable[[StepLog], None] | None = None,
 ) -> RunLog:
+    """Run `recipe` on `driver`, writing run_log.json (and output.xlsx) into `job_dir`.
+
+    `on_step_start(index, total, step)` and `on_step_end(step_log)` report live progress;
+    a callback that raises is logged and ignored, it never breaks the run.
+    """
     job_path = Path(job_dir)
     job_id = job_id or job_path.name
     started = now()
@@ -152,21 +168,22 @@ def run_recipe(
         logger.info("job_start", url=recipe.url, steps=len(steps))
 
         for index, step in enumerate(steps, start=1):
+            _notify(on_step_start, index, len(steps), step)
             step_clock = time.perf_counter()
             result = execute_step(driver, step, ActionContext(job_path, index, now))
             duration_ms = int((time.perf_counter() - step_clock) * 1000)
 
-            run_log.steps.append(
-                StepLog(
-                    index=index,
-                    type=step.type,
-                    name=step.name,
-                    success=result.success,
-                    error=result.error,
-                    duration_ms=duration_ms,
-                    data=_loggable_data(result.data),
-                )
+            step_log = StepLog(
+                index=index,
+                type=step.type,
+                name=step.name,
+                success=result.success,
+                error=result.error,
+                duration_ms=duration_ms,
+                data=_loggable_data(result.data),
             )
+            run_log.steps.append(step_log)
+            _notify(on_step_end, step_log)
             emit = logger.info if result.success else logger.warning
             emit(
                 "step_result",
@@ -187,7 +204,10 @@ def run_recipe(
                 break
 
         if tables:
+            steps_before_export = len(run_log.steps)
             _export_excel(run_log, tables, job_path)
+            for export_step in run_log.steps[steps_before_export:]:
+                _notify(on_step_end, export_step)
 
         run_log.success = all(step.success for step in run_log.steps)
         run_log.duration_ms = int((time.perf_counter() - started_clock) * 1000)
