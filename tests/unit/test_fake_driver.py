@@ -111,6 +111,14 @@ def test_fail_on_raises_n_times_then_succeeds() -> None:
     assert len(fake.calls_to("fill")) == 3
 
 
+def test_wait_for_url_contains_passes_or_times_out() -> None:
+    fake = FakePageDriver()
+    fake.goto("https://x.io/secure/home")
+    fake.wait_for_url_contains("/secure")
+    with pytest.raises(DriverTimeoutError, match="/login"):
+        fake.wait_for_url_contains("/login", timeout_ms=10)
+
+
 def test_fail_on_none_fails_every_call() -> None:
     fake = FakePageDriver()
     fake.fail_on("click", DriverTimeoutError("always"), times=None)

@@ -24,6 +24,7 @@ DRIVER_METHODS = frozenset(
         "wait_for_download",
         "get_table_rows",
         "wait_for_selector",
+        "wait_for_url_contains",
         "get_element_state",
     }
 )
@@ -184,6 +185,13 @@ class FakePageDriver:
         self._enter("wait_for_selector", selector, timeout_ms)
         if selector in self._missing:
             raise DriverTimeoutError(f"Timed out after {timeout_ms}ms waiting for '{selector}'")
+
+    def wait_for_url_contains(self, fragment: str, timeout_ms: int = 30_000) -> None:
+        self._enter("wait_for_url_contains", fragment, timeout_ms)
+        if fragment not in self.url:
+            raise DriverTimeoutError(
+                f"Timed out after {timeout_ms}ms waiting for URL containing '{fragment}'"
+            )
 
     def get_element_state(self, selector: str) -> ElementState | None:
         self._enter("get_element_state", selector)

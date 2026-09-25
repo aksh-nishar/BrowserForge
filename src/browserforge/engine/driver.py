@@ -55,6 +55,10 @@ class PageDriver(Protocol):
 
     def wait_for_selector(self, selector: str, timeout_ms: int = 30_000) -> None: ...
 
+    def wait_for_url_contains(self, fragment: str, timeout_ms: int = 30_000) -> None:
+        """Block until the page URL contains `fragment`, else raise DriverTimeoutError."""
+        ...
+
     def get_element_state(self, selector: str) -> ElementState | None:
         """Return visibility/disabled flags, or None if the element is absent."""
         ...
