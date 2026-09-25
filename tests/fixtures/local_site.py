@@ -1,9 +1,12 @@
 """A tiny local website for integration tests: deterministic, offline, no third-party server.
 
 Pages: /login (+ /secure), /table?page=N (3 pages), /table-endless, /download (+ file),
-/upload, /form, /delayed, /slow-table?page=N (3 pages that stream in slowly).
+/upload, /form, /delayed, /slow-table?page=N (3 pages that stream in slowly), /register
+(a full registration form that records what it receives; read back at /submissions),
+/register-late (form built by JavaScript), /register-captcha (CAPTCHA widget and an iframe).
 """
 
+import json
 import threading
 import time
 from collections.abc import Iterator
@@ -92,6 +95,61 @@ FORM_PAGE = _html(
     <div id="chart" style="width:120px;height:60px;background:#39c">Chart</div>""",
 )
 
+REGISTER_PAGE = _html(
+    "Register",
+    """<form method="post" action="/register" enctype="multipart/form-data">
+      <label for="first_name">First name *</label>
+      <input id="first_name" name="first_name" required>
+      <label for="email">E-mail</label>
+      <input id="email" name="email" type="email">
+      <label for="dob">Date of birth</label>
+      <input id="dob" name="dob" type="date">
+      <label for="country">Country</label>
+      <select id="country" name="country">
+        <option value="">--</option><option value="IN">India</option>
+        <option value="US">USA</option>
+      </select>
+      <fieldset><legend>Plan</legend>
+        <label><input type="radio" name="plan" value="basic"> Basic</label>
+        <label><input type="radio" name="plan" value="pro"> Pro</label>
+      </fieldset>
+      <label for="notes">Notes</label>
+      <textarea id="notes" name="notes"></textarea>
+      <label for="cv">CV</label>
+      <input id="cv" name="cv" type="file">
+      <label>
+        <input id="agree" name="agree" type="checkbox" value="yes"> I agree to the terms
+      </label>
+      <input type="hidden" name="token" value="abc123">
+      <input id="locked" name="locked" disabled>
+      <input placeholder="Nickname">
+      <button type="submit" id="send">Register</button>
+    </form>""",
+)
+
+# A form that JavaScript builds after the page has loaded.
+REGISTER_LATE_PAGE = _html(
+    "Late form",
+    """<div id="mount"></div>
+    <script>setTimeout(() => {
+      document.getElementById('mount').innerHTML =
+        '<form method="post" action="/register"><label for="late_name">Late name</label>' +
+        '<input id="late_name" name="late_name">' +
+        '<button id="late_send" type="submit">Go</button></form>';
+    }, 400);</script>""",
+)
+
+# A page with things BrowserForge cannot handle: a CAPTCHA widget and an embedded frame.
+REGISTER_CAPTCHA_PAGE = _html(
+    "Captcha form",
+    """<div class="g-recaptcha" data-sitekey="test"></div>
+    <iframe src="/form" width="120" height="60"></iframe>
+    <input id="q" name="q">""",
+)
+
+# What the /register form received, oldest first. Cleared each time the site starts.
+SUBMISSIONS: list[dict[str, str]] = []
+
 DELAYED_PAGE = _html(
     "Delayed",
     """<script>setTimeout(() => {
@@ -106,6 +164,32 @@ SECURE_PAGE = _html("Secure", '<h1 id="dashboard">Secure Area</h1>')
 def _uploaded_page(files: list[tuple[str, str]]) -> str:
     items = "".join(f"<li>{name}: {content}</li>" for name, content in files)
     return _html("Uploaded", f'<ul id="uploaded">{items}</ul>')
+
+
+def _parse_form(content_type: str, body: bytes) -> dict[str, str]:
+    """Fields of a multipart or urlencoded form post. Uploaded files show as `[file name: text]`."""
+    if "multipart" not in content_type:
+        return {k: v[0] for k, v in parse_qs(body.decode("utf-8")).items()}
+    raw = f"Content-Type: {content_type}\r\nMIME-Version: 1.0\r\n\r\n".encode() + body
+    message = BytesParser(policy=policy.default).parsebytes(raw)
+    fields: dict[str, str] = {}
+    for part in message.iter_parts():
+        name = part.get_param("name", header="content-disposition")
+        if not isinstance(name, str):
+            continue
+        payload = bytes(part.get_payload(decode=True) or b"").decode("utf-8", "replace")
+        filename = part.get_filename()
+        if filename is None:
+            fields[name] = payload
+        elif filename:  # an empty file input arrives with an empty name: ignore it
+            fields[name] = f"[file {filename}: {payload}]"
+    return fields
+
+
+def _thanks_page(fields: dict[str, str]) -> str:
+    items = "".join(f"<li>{key}={value}</li>" for key, value in fields.items())
+    who = fields.get("first_name") or fields.get("late_name") or "there"
+    return _html("Thanks", f'<div id="thanks">Thanks, {who}</div><ul id="received">{items}</ul>')
 
 
 class _Handler(BaseHTTPRequestHandler):
@@ -188,6 +272,14 @@ class _Handler(BaseHTTPRequestHandler):
             self._send(UPLOAD_PAGE)
         elif parsed.path == "/form":
             self._send(FORM_PAGE)
+        elif parsed.path == "/register":
+            self._send(REGISTER_PAGE)
+        elif parsed.path == "/register-late":
+            self._send(REGISTER_LATE_PAGE)
+        elif parsed.path == "/register-captcha":
+            self._send(REGISTER_CAPTCHA_PAGE)
+        elif parsed.path == "/submissions":
+            self._send(json.dumps(SUBMISSIONS), content_type="application/json")
         elif parsed.path == "/delayed":
             self._send(DELAYED_PAGE)
         elif parsed.path == "/slow-table":
@@ -205,6 +297,10 @@ class _Handler(BaseHTTPRequestHandler):
                 self._redirect("/secure")
             else:
                 self._send(_login_page("Your username or password is invalid!"))
+        elif self.path == "/register":
+            fields = _parse_form(self.headers.get("Content-Type", ""), body)
+            SUBMISSIONS.append(fields)
+            self._send(_thanks_page(fields))
         elif self.path == "/upload":
             content_type = self.headers.get("Content-Type", "")
             raw = f"Content-Type: {content_type}\r\nMIME-Version: 1.0\r\n\r\n".encode() + body
@@ -223,6 +319,7 @@ class _Handler(BaseHTTPRequestHandler):
 @contextmanager
 def run_local_site() -> Iterator[str]:
     """Serve the site on a free localhost port; yields the base URL (no trailing slash)."""
+    SUBMISSIONS.clear()
     server = ThreadingHTTPServer(("127.0.0.1", 0), _Handler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()

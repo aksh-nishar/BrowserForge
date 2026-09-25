@@ -28,7 +28,20 @@ from browserforge.engine.data_rows import (
     find_placeholders,
     secret_columns,
 )
-from browserforge.engine.driver import playwright_driver
+from browserforge.engine.driver import DriverError, playwright_driver
+from browserforge.engine.errors import classify, humanize
+from browserforge.engine.form_scan import (
+    MAX_KEY_LENGTH,
+    MAX_SELECTOR_LENGTH,
+    MAX_URL_LENGTH,
+    PlanError,
+    PlannedField,
+    check_url,
+    fields_to_recipe,
+    normalize_address,
+    plan_form,
+    recipe_to_yaml,
+)
 from browserforge.engine.recipe import (
     Recipe,
     RecipeValidationError,
@@ -40,10 +53,18 @@ from browserforge.jobs import (
     DriverFactory,
     JobNotFoundError,
     JobStore,
+    crash_message,
     run_bulk_job,
     run_job,
 )
 from browserforge.logging_config import configure_logging
+from browserforge.profiles import (
+    MAX_FIELDS,
+    ProfileError,
+    ProfileStore,
+    apply_profile,
+    check_name,
+)
 from browserforge.recipe_files import (
     RECIPE_EXTENSIONS,
     find_recipe,
@@ -94,6 +115,32 @@ def create_default_app() -> FastAPI:
 class JobRequest(BaseModel):
     recipe_name: str = Field(min_length=1, max_length=64)
     dry_run: bool = False
+
+
+class ProfileBody(BaseModel):
+    values: dict[str, Any] = Field(max_length=MAX_FIELDS + 50)
+
+
+class ApplyProfileBody(BaseModel):
+    placeholders: list[str] = Field(max_length=200)
+
+
+class ScanRequest(BaseModel):
+    url: str = Field(min_length=1, max_length=MAX_URL_LENGTH)
+
+
+class GeneratedField(BaseModel):
+    action: str = Field(max_length=20)
+    selector: str = Field(min_length=1, max_length=MAX_SELECTOR_LENGTH)
+    key: str = Field(default="", max_length=MAX_KEY_LENGTH)
+    label: str = Field(default="", max_length=200)
+
+
+class GenerateRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=64)
+    url: str = Field(min_length=1, max_length=MAX_URL_LENGTH)
+    fields: list[GeneratedField] = Field(max_length=200)
+    submit_selector: str | None = Field(default=None, max_length=MAX_SELECTOR_LENGTH)
 
 
 def _default_driver_factory() -> Any:
@@ -149,6 +196,7 @@ def create_app(
     data_folder = data_dir if data_dir is not None else jobs_dir.parent / "data"
     job_store = store if store is not None else JobStore()
     schedule_store = ScheduleStore(data_folder)
+    profile_store = ProfileStore(data_folder)
     runner = ScheduleRunner(
         get=schedule_store.get,
         update=schedule_store.update,
@@ -173,6 +221,7 @@ def create_app(
     app.state.data_dir = data_folder
     app.state.store = job_store
     app.state.schedule_store = schedule_store
+    app.state.profile_store = profile_store
     app.state.schedule_runner = runner
     app.state.scheduler = service
 
@@ -207,6 +256,54 @@ def create_app(
         target.write_text(text, encoding="utf-8")
         logger.info("recipe_saved", recipe=name, replaced=replaced, steps=total_steps(recipe))
         return {"name": name, "saved": True, "replaced": replaced, "steps": total_steps(recipe)}
+
+    @app.post("/scan")
+    def scan_form_page(body: ScanRequest) -> dict[str, Any]:
+        """Open a page and list the form fields a recipe could fill in (no recipe is saved)."""
+        try:
+            url = check_url(normalize_address(body.url))
+        except PlanError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        try:
+            with driver_factory() as driver:
+                scan = driver.scan_form(url)
+        except DriverError as exc:
+            logger.warning("scan_failed", url=url, error=str(exc))
+            raise HTTPException(502, humanize(classify(exc), str(exc))) from exc
+        except Exception as exc:
+            logger.exception("scan_crashed", url=url)
+            raise HTTPException(500, crash_message(exc)) from exc
+        return {"url": url, **plan_form(scan).to_dict()}
+
+    @app.post("/recipes/generate")
+    def generate_recipe(body: GenerateRequest) -> dict[str, Any]:
+        """Save a recipe built from confirmed scan results; values become {{placeholders}}."""
+        name = safe_recipe_name(body.name)
+        if name is None:
+            raise HTTPException(400, "Give the recipe a name made of letters or digits.")
+        fields = [
+            PlannedField(key=f.key.strip(), label=f.label, action=f.action, selector=f.selector)
+            for f in body.fields
+        ]
+        try:
+            text = recipe_to_yaml(fields_to_recipe(body.url, fields, body.submit_selector))
+            recipe = parse_recipe_text(text, "generated recipe")
+        except (PlanError, RecipeValidationError) as exc:
+            raise HTTPException(400, str(exc)) from exc
+
+        recipes_dir.mkdir(parents=True, exist_ok=True)
+        target = recipes_dir / f"{name}.yaml"
+        replaced = target.exists()
+        target.write_text(text, encoding="utf-8")
+        logger.info("recipe_generated", recipe=name, replaced=replaced, fields=len(fields))
+        return {
+            "name": name,
+            "saved": True,
+            "replaced": replaced,
+            "steps": total_steps(recipe),
+            "placeholders": sorted(find_placeholders(recipe)),
+            "has_submit": has_submit_step(recipe),
+        }
 
     @app.get("/recipes")
     def list_recipes() -> dict[str, Any]:
@@ -356,6 +453,52 @@ def create_app(
             return job_store.status(job_id)
         except JobNotFoundError as exc:
             raise HTTPException(404, str(exc)) from exc
+
+    # ---- profiles ----
+
+    def _profile_name(name: str) -> str:
+        try:
+            return check_name(name)
+        except ProfileError as exc:
+            raise HTTPException(400, str(exc)) from exc
+
+    @app.get("/profiles")
+    def list_profiles() -> dict[str, Any]:
+        """Profile names and which fields each holds (the values themselves are not listed)."""
+        profiles = []
+        for name in profile_store.names():
+            found = profile_store.get(name) or {}
+            profiles.append({"name": name, "fields": sorted(found)})
+        return {"profiles": profiles}
+
+    @app.put("/profiles/{name}")
+    def save_profile(name: str, body: ProfileBody) -> dict[str, Any]:
+        """Create or replace a profile. Secret-looking fields are dropped, never stored."""
+        clean = _profile_name(name)
+        try:
+            kept, dropped = profile_store.save(clean, body.values)
+        except ProfileError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        logger.info("profile_saved", profile=clean, fields=len(kept), dropped=len(dropped))
+        return {"name": clean, "saved": sorted(kept), "dropped": dropped}
+
+    @app.delete("/profiles/{name}")
+    def delete_profile(name: str) -> dict[str, Any]:
+        clean = _profile_name(name)
+        if not profile_store.delete(clean):
+            raise HTTPException(404, f"Profile '{clean}' not found")
+        logger.info("profile_deleted", profile=clean)
+        return {"deleted": True}
+
+    @app.post("/profiles/{name}/apply")
+    def apply_saved_profile(name: str, body: ApplyProfileBody) -> dict[str, Any]:
+        """The profile's values for the given placeholder names, and the ones it cannot fill."""
+        clean = _profile_name(name)
+        profile = profile_store.get(clean)
+        if profile is None:
+            raise HTTPException(404, f"Profile '{clean}' not found")
+        values, missing = apply_profile(body.placeholders, profile)
+        return {"values": values, "missing": missing}
 
     # ---- schedules ----
 

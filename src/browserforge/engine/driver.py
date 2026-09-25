@@ -35,6 +35,35 @@ class ElementState(TypedDict):
     disabled: bool
 
 
+class FormOption(TypedDict):
+    value: str
+    text: str
+
+
+class RawField(TypedDict):
+    """One form control as the page shows it (what `scan_form` reports, before any planning)."""
+
+    tag: str  # input | select | textarea | button
+    type: str  # text, email, checkbox, radio, file, submit, select, textarea, ...
+    id: str
+    name: str
+    label: str  # the visible label text for this control
+    group_label: str  # for radio buttons: the fieldset legend, if there is one
+    placeholder: str
+    value: str  # the value attribute (radio/checkbox value, or a button's caption)
+    options: list[FormOption]
+    required: bool
+    disabled: bool
+    visible: bool
+    id_count: int  # how many elements on the page share this id
+    name_count: int  # how many elements on the page share this name
+
+
+class FormScan(TypedDict):
+    fields: list[RawField]
+    notes: list[str]  # things on the page that BrowserForge cannot handle (iframe, captcha...)
+
+
 class PageDriver(Protocol):
     def goto(self, url: str) -> None: ...
 
@@ -72,6 +101,10 @@ class PageDriver(Protocol):
         """Return visibility/disabled flags, or None if the element is absent."""
         ...
 
+    def scan_form(self, url: str) -> FormScan:
+        """Open `url` and report every form control on it (for generating a recipe)."""
+        ...
+
 
 # ---------------------------------------------------------------------------
 # Real implementation
@@ -79,6 +112,63 @@ class PageDriver(Protocol):
 
 DEFAULT_TIMEOUT_MS = 30_000
 _DOWNLOAD_POLL_MS = 50
+_SETTLE_MS = 3_000
+
+# Reads every input/select/textarea/button on the page. Runs in the page; returns plain data.
+_SCAN_JS = """
+() => {
+  const clean = (text) => (text || '').replace(/\\s+/g, ' ').trim();
+  const quote = (text) => '"' + text.replace(/["\\\\]/g, '\\\\$&') + '"';
+  const isVisible = (el) => {
+    const style = getComputedStyle(el);
+    const box = el.getBoundingClientRect();
+    return style.visibility !== 'hidden' && style.display !== 'none' && (box.width > 0 || box.height > 0);
+  };
+  const labelOf = (el) => {
+    if (el.id) {
+      const linked = document.querySelector('label[for=' + quote(el.id) + ']');
+      if (linked) return clean(linked.innerText);
+    }
+    const wrapping = el.closest('label');
+    if (wrapping) return clean(wrapping.innerText);
+    return clean(el.getAttribute('aria-label'));
+  };
+  const count = (attribute, value) =>
+    value ? document.querySelectorAll('[' + attribute + '=' + quote(value) + ']').length : 0;
+
+  const fields = [];
+  for (const el of document.querySelectorAll('input, select, textarea, button')) {
+    const tag = el.tagName.toLowerCase();
+    const type = (el.getAttribute('type') || (tag === 'input' ? 'text' : tag)).toLowerCase();
+    const legend = el.closest('fieldset') ? el.closest('fieldset').querySelector('legend') : null;
+    const isButton = tag === 'button' || type === 'submit' || type === 'button';
+    fields.push({
+      tag, type,
+      id: el.id || '',
+      name: el.getAttribute('name') || '',
+      label: isButton ? clean(el.innerText || el.value) : labelOf(el),
+      group_label: legend ? clean(legend.innerText) : '',
+      placeholder: el.getAttribute('placeholder') || '',
+      value: el.getAttribute('value') || '',
+      options: tag === 'select'
+        ? Array.from(el.options).map((o) => ({ value: o.value, text: clean(o.text) }))
+        : [],
+      required: Boolean(el.required),
+      disabled: Boolean(el.disabled),
+      visible: type === 'hidden' ? false : isVisible(el),
+      id_count: count('id', el.id),
+      name_count: count('name', el.getAttribute('name') || ''),
+    });
+  }
+
+  const notes = [];
+  if (document.querySelector('iframe')) notes.push('iframe');
+  if (document.querySelector('.g-recaptcha, .h-captcha, .cf-turnstile, [data-sitekey], iframe[src*="recaptcha"], iframe[src*="hcaptcha"]')) notes.push('captcha');
+  if (Array.from(document.querySelectorAll('*')).some((el) => el.shadowRoot)) notes.push('shadow');
+  if (document.querySelector('input[type=password]')) notes.push('password');
+  return { fields, notes };
+}
+"""  # noqa: E501 - JavaScript, kept readable rather than wrapped
 
 # Rows of cell text for the first <table>-like element: every <tr>, its <th>/<td> cells.
 _TABLE_ROWS_JS = """
@@ -211,6 +301,16 @@ class PlaywrightDriver:
                 return None
             first = locator.first
             return {"visible": first.is_visible(), "disabled": first.is_disabled()}
+
+    def scan_form(self, url: str) -> FormScan:
+        self.goto(url)
+        try:  # pages that build their form with JavaScript need a moment; never wait for long
+            self.page.wait_for_load_state("networkidle", timeout=_SETTLE_MS)
+        except PlaywrightError:
+            pass
+        with self._translated("the page to be read"):
+            scan: FormScan = self.page.evaluate(_SCAN_JS)
+        return scan
 
     def close(self) -> None:
         """Remove temporary download files. The page/browser are owned by the caller."""

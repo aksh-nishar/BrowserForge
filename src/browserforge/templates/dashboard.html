@@ -85,6 +85,9 @@
       outline: 3px solid var(--accent);
       outline-offset: 2px;
     }
+    details.card > summary { cursor: pointer; font-weight: 600; font-size: 1.1rem; }
+    details.card[open] > summary { margin-bottom: 12px; }
+    td input[type="text"] { width: 100%; min-width: 120px; }
     .row.check label { min-width: 0; font-weight: 400; display: flex; align-items: center; gap: 8px; }
     .hint { margin: 0 0 12px; color: var(--muted); }
     #message { min-height: 1.5em; margin: 4px 0 0; white-space: pre-line; }
@@ -124,6 +127,36 @@
   </header>
 
   <main>
+    <details class="card" id="create-card" open>
+      <summary>Create a recipe from a web form</summary>
+      <p class="hint">Paste the address of a page with a form. BrowserForge lists the fields it finds; you confirm them and it writes the recipe for you. Works for forms that open without logging in.</p>
+      <div class="row">
+        <label for="scan-url">Web address of the form</label>
+        <input type="text" id="scan-url" placeholder="example.com/register" autocomplete="off">
+        <button type="button" id="scan-btn">Scan the page</button>
+      </div>
+      <p id="scan-message" role="status" aria-live="polite" class="hint"></p>
+      <div id="scan-result" hidden>
+        <div id="scan-notes"></div>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Use</th><th>Field</th><th>Name for its value</th><th>Details</th></tr></thead>
+            <tbody id="scan-fields-body"></tbody>
+          </table>
+        </div>
+        <p class="hint" id="scan-skipped" hidden></p>
+        <div class="row">
+          <label for="submit-select">Submit button</label>
+          <select id="submit-select"></select>
+        </div>
+        <div class="row">
+          <label for="generated-name">Recipe name</label>
+          <input type="text" id="generated-name" autocomplete="off">
+          <button type="button" id="save-generated-btn" class="primary">Save recipe</button>
+        </div>
+      </div>
+    </details>
+
     <section class="card" aria-labelledby="h-recipe">
       <h2 id="h-recipe">1. Choose a recipe</h2>
       <div class="row">
@@ -153,6 +186,20 @@
         </select>
       </div>
       <div id="typed-fields"></div>
+      <div id="profile-box" hidden>
+        <div class="row">
+          <label for="profile-select">Saved profile</label>
+          <select id="profile-select"></select>
+          <button type="button" id="profile-load-btn">Fill from profile</button>
+          <button type="button" id="profile-delete-btn">Delete</button>
+        </div>
+        <div class="row">
+          <label for="profile-name">Save these values as</label>
+          <input type="text" id="profile-name" placeholder="e.g. Aksh" autocomplete="off">
+          <button type="button" id="profile-save-btn">Save profile</button>
+        </div>
+        <p id="profile-message" role="status" aria-live="polite" class="hint"></p>
+      </div>
       <div id="sheet-fields" hidden>
         <div class="row">
           <label for="data-file">Data file (.csv or .xlsx)</label>
@@ -237,7 +284,9 @@
     </section>
   </main>
 
+  {# The page is rendered by Jinja: raw keeps it from touching the {{placeholders}} in the script. #}
   <script>
+  {% raw %}
     "use strict";
     const POLL_MS = 2000;
     const $ = (id) => document.getElementById(id);
@@ -327,6 +376,8 @@
           $("typed-fields").appendChild(row);
         }
       }
+      $("profile-box").hidden = !needsData;
+      sayProfile("", "");
     }
 
     function typedValues() {
@@ -347,6 +398,82 @@
       const sheet = $("data-mode").value === "sheet";
       $("typed-fields").hidden = sheet;
       $("sheet-fields").hidden = !sheet;
+      $("profile-box").hidden = sheet || !$("typed-fields").children.length;
+    }
+
+    function sayProfile(text, kind) {
+      const message = $("profile-message");
+      message.textContent = text;
+      message.style.color = kind === "error" ? "var(--bad)" : kind === "ok" ? "var(--ok)" : "";
+    }
+
+    async function loadProfiles(selectName) {
+      let data;
+      try {
+        data = await api("/profiles");
+      } catch (error) {
+        sayProfile(error.message, "error");
+        return;
+      }
+      const select = $("profile-select");
+      select.replaceChildren(el("option", { value: "" }, data.profiles.length ? "(choose a profile)" : "(no saved profiles yet)"));
+      for (const profile of data.profiles) select.appendChild(el("option", { value: profile.name }, profile.name));
+      if (selectName) select.value = selectName;
+      $("profile-load-btn").disabled = !data.profiles.length;
+      $("profile-delete-btn").disabled = !data.profiles.length;
+    }
+
+    async function fillFromProfile() {
+      const recipe = selectedRecipe();
+      const name = $("profile-select").value;
+      if (!recipe || !name) { sayProfile("Choose a profile first.", "error"); return; }
+      try {
+        const applied = await api("/profiles/" + encodeURIComponent(name) + "/apply", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ placeholders: recipe.placeholders }),
+        });
+        for (const input of $("typed-fields").querySelectorAll("input")) {
+          if (Object.hasOwn(applied.values, input.dataset.name)) input.value = applied.values[input.dataset.name];
+        }
+        const filled = Object.keys(applied.values).length;
+        sayProfile(applied.missing.length
+          ? "Filled " + filled + " field(s). Still to fill in yourself: " + applied.missing.join(", ") + "."
+          : "Filled all " + filled + " field(s).", applied.missing.length ? "" : "ok");
+      } catch (error) {
+        sayProfile(error.message, "error");
+      }
+    }
+
+    async function saveProfile() {
+      const name = $("profile-name").value.trim();
+      if (!name) { sayProfile("Give the profile a name first.", "error"); return; }
+      try {
+        const saved = await api("/profiles/" + encodeURIComponent(name), {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ values: typedValues() }),
+        });
+        let text = "Saved profile '" + saved.name + "' (" + saved.saved.length + " field(s)).";
+        if (saved.dropped.length) text += " Not saved, because they look like secrets: " + saved.dropped.join(", ") + ".";
+        sayProfile(text, "ok");
+        $("profile-name").value = "";
+        await loadProfiles(saved.name);
+      } catch (error) {
+        sayProfile(error.message, "error");
+      }
+    }
+
+    async function deleteProfile() {
+      const name = $("profile-select").value;
+      if (!name) { sayProfile("Choose a profile to delete.", "error"); return; }
+      try {
+        await api("/profiles/" + encodeURIComponent(name), { method: "DELETE" });
+        sayProfile("Deleted profile '" + name + "'.", "ok");
+      } catch (error) {
+        sayProfile(error.message, "error");
+      }
+      await loadProfiles();
     }
 
     function renderMapping(preview) {
@@ -598,6 +725,111 @@
       $("results-card").hidden = false;
     }
 
+    let scanned = null;
+    let scanRows = [];
+
+    function sayScan(text, kind) {
+      const message = $("scan-message");
+      message.textContent = text;
+      message.style.color = kind === "error" ? "var(--bad)" : kind === "ok" ? "var(--ok)" : "";
+    }
+
+    function describeField(field) {
+      if (field.options.length) return field.options.join(", ");
+      return field.selector;
+    }
+
+    function renderScan() {
+      $("scan-result").hidden = false;
+      $("scan-notes").replaceChildren(...scanned.notes.map((note) => el("div", { class: "notice warn" }, note)));
+
+      scanRows = scanned.fields.map((field) => {
+        const use = el("input", { type: "checkbox", "aria-label": "Use " + (field.label || field.selector) });
+        use.checked = true;
+        const key = el("input", { type: "text", autocomplete: "off", "aria-label": "Name for " + (field.label || field.selector) });
+        key.value = field.key;
+        key.disabled = field.action === "check";
+        return { field, use, key };
+      });
+      $("scan-fields-body").replaceChildren(...scanRows.map(({ field, use, key }) => {
+        const row = el("tr");
+        const useCell = el("td");
+        useCell.appendChild(use);
+        row.appendChild(useCell);
+        const kind = field.action === "check" ? "tick box" : field.kind;
+        row.appendChild(el("td", {}, (field.label || "(no label)") + " - " + kind + (field.required ? " (required)" : "")));
+        const keyCell = el("td");
+        keyCell.appendChild(key);
+        row.appendChild(keyCell);
+        row.appendChild(el("td", {}, describeField(field)));
+        return row;
+      }));
+
+      const skipped = $("scan-skipped");
+      skipped.hidden = !scanned.skipped.length;
+      skipped.textContent = scanned.skipped.length ? "Left out: " + scanned.skipped.join(" ") : "";
+
+      const submit = $("submit-select");
+      submit.replaceChildren(el("option", { value: "" }, "(none - do not press a button)"));
+      for (const candidate of scanned.submit_candidates) {
+        submit.appendChild(el("option", { value: candidate.selector }, candidate.label + " (" + candidate.selector + ")"));
+      }
+      if (scanned.submit_candidates.length) submit.value = scanned.submit_candidates[0].selector;
+
+      const host = new URL(scanned.url).hostname.replace(/[^A-Za-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
+      $("generated-name").value = host || "form";
+    }
+
+    async function scanPage() {
+      const url = $("scan-url").value.trim();
+      if (!url) { sayScan("Enter the web address of the form page.", "error"); return; }
+      $("scan-btn").disabled = true;
+      $("scan-result").hidden = true;
+      sayScan("Opening the page...", "");
+      try {
+        scanned = await api("/scan", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ url }),
+        });
+        renderScan();
+        sayScan(scanned.fields.length ? scanned.fields.length + " field(s) found. Untick any you do not want." : "No fillable fields were found on that page.", scanned.fields.length ? "ok" : "error");
+      } catch (error) {
+        sayScan(error.message, "error");
+      } finally {
+        $("scan-btn").disabled = false;
+      }
+    }
+
+    async function saveGenerated() {
+      const chosen = scanRows.filter((row) => row.use.checked).map(({ field, key }) => ({
+        action: field.action,
+        selector: field.selector,
+        key: key.value.trim(),
+        label: field.label,
+      }));
+      try {
+        const saved = await api("/recipes/generate", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            name: $("generated-name").value.trim(),
+            url: scanned.url,
+            fields: chosen,
+            submit_selector: $("submit-select").value || null,
+          }),
+        });
+        sayScan("Saved recipe '" + saved.name + "'. It is selected below: fill in the values and try a test run first.", "ok");
+        await loadRecipes(saved.name);
+        $("dry-run").checked = saved.has_submit;
+      } catch (error) {
+        sayScan(error.message, "error");
+      }
+    }
+
+    $("scan-btn").addEventListener("click", scanPage);
+    $("save-generated-btn").addEventListener("click", saveGenerated);
+
     function saySchedule(text, kind) {
       const message = $("schedule-message");
       message.textContent = text;
@@ -696,9 +928,14 @@
       $("run-btn").disabled = !$("recipe-select").value;
       showRecipeControls();
     });
+    $("profile-load-btn").addEventListener("click", fillFromProfile);
+    $("profile-save-btn").addEventListener("click", saveProfile);
+    $("profile-delete-btn").addEventListener("click", deleteProfile);
+    loadProfiles();
     $("data-mode").addEventListener("change", showDataMode);
     $("data-file").addEventListener("change", () => previewSheet(null));
     loadRecipes().catch((error) => say(error.message, "error"));
+  {% endraw %}
   </script>
 </body>
 </html>

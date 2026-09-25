@@ -40,6 +40,15 @@ def test_page_has_every_data_element_the_script_relies_on(html: str, element_id:
     assert f'id="{element_id}"' in html
 
 
+def test_the_page_script_reaches_the_browser_untouched_by_the_template_engine(html: str) -> None:
+    """Jinja renders this page; it must not swallow the script's `{{name}}` placeholder text
+    (once it did: the data card read "fills in + name + , + name +")."""
+    script = html.split("<script>", 1)[1]
+    assert '"{{" + name + "}}"' in script
+    assert "{% raw %}" not in html
+    assert "{% endraw %}" not in html
+
+
 def test_the_data_card_starts_hidden_until_a_recipe_needs_data(html: str) -> None:
     assert 'id="data-card" aria-labelledby="h-data" hidden' in html
 

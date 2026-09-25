@@ -286,7 +286,7 @@ def build_bulk_status(record: JobRecord) -> dict[str, Any] | None:
     }
 
 
-def _crash_message(exc: Exception) -> str:
+def crash_message(exc: Exception) -> str:
     """Plain-language reason a job could not run at all. Never includes a stack trace."""
     if "Executable doesn't exist" in str(exc):
         return (
@@ -336,7 +336,7 @@ def run_job(
 def _fail_job(store: JobStore, job_id: str, exc: Exception) -> None:
     logger.exception("job_crashed")
     try:
-        store.mark_failed(job_id, _crash_message(exc))
+        store.mark_failed(job_id, crash_message(exc))
     except (JobNotFoundError, JobStateError):
         logger.exception("job_state_update_failed")
 

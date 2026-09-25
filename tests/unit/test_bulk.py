@@ -9,11 +9,10 @@ from typing import Any
 import pytest
 from openpyxl import load_workbook
 
-from browserforge.engine import bulk as bulk_module
 from browserforge.engine.bulk import BulkResult, RowResult, row_folder, row_label, run_bulk
 from browserforge.engine.driver import DriverError
 from browserforge.engine.recipe import Recipe, Step
-from browserforge.engine.runner import DryRunError
+from browserforge.engine.runner import DryRunError, run_recipe
 from fixtures.fake_driver import FakePageDriver
 
 NOW = datetime(2026, 9, 25, 10, 15, 30)
@@ -66,7 +65,7 @@ def sheet_rows(path: Path, sheet: str) -> list[dict[str, Any]]:
     worksheet = load_workbook(path)[sheet]
     table = list(worksheet.iter_rows(values_only=True))
     header = table[0]
-    return [dict(zip(header, row, strict=True)) for row in table[1:]]
+    return [dict(zip((str(name) for name in header), row, strict=True)) for row in table[1:]]
 
 
 # ---- all rows succeed ----
@@ -169,7 +168,7 @@ def test_a_row_with_a_missing_value_fails_without_opening_the_browser(tmp_path: 
 def test_a_crash_inside_one_row_does_not_stop_the_others(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    real = bulk_module.run_recipe
+    real = run_recipe
     calls = {"n": 0}
 
     def flaky(*args: Any, **kwargs: Any) -> Any:
@@ -178,7 +177,7 @@ def test_a_crash_inside_one_row_does_not_stop_the_others(
             raise RuntimeError("boom")
         return real(*args, **kwargs)
 
-    monkeypatch.setattr(bulk_module, "run_recipe", flaky)
+    monkeypatch.setattr("browserforge.engine.bulk.run_recipe", flaky)
     result = run(fill_and_click(), ROWS, FakePageDriver(), tmp_path)
     assert [r.success for r in result.rows] == [True, False, True]
     assert "unexpected" in (result.rows[1].error or "")

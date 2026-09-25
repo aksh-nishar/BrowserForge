@@ -4,11 +4,7 @@ Schedules survive a restart. The file holds recipe names, times and last-run inf
 never passwords (those come from environment variables at run time).
 """
 
-import contextlib
-import json
-import os
 import shutil
-import tempfile
 import threading
 from dataclasses import replace
 from pathlib import Path
@@ -16,6 +12,7 @@ from typing import Any
 
 import structlog
 
+from browserforge.jsonfile import load_json, save_json
 from browserforge.schedule import Schedule
 
 logger = structlog.get_logger(__name__)
@@ -23,6 +20,13 @@ logger = structlog.get_logger(__name__)
 SCHEDULES_FILE = "schedules.json"
 DATA_FOLDER = "schedule_data"
 DATA_SUFFIXES = (".csv", ".xlsx")
+
+
+def _entries_of(raw: Any) -> list[Any]:
+    entries = raw["schedules"]
+    if not isinstance(entries, list):
+        raise TypeError("'schedules' must be a list")
+    return entries
 
 
 class ScheduleStore:
@@ -36,16 +40,7 @@ class ScheduleStore:
     # ---- reading ----
 
     def _load(self) -> list[Schedule]:
-        if not self._path.is_file():
-            return []
-        try:
-            raw: Any = json.loads(self._path.read_text(encoding="utf-8"))
-            entries = raw["schedules"]
-            if not isinstance(entries, list):
-                raise TypeError("'schedules' must be a list")
-        except (OSError, ValueError, KeyError, TypeError) as exc:
-            self._quarantine(exc)
-            return []
+        entries = load_json(self._path, _entries_of) or []
         schedules: list[Schedule] = []
         for entry in entries:
             try:
@@ -53,13 +48,6 @@ class ScheduleStore:
             except (TypeError, ValueError, AttributeError):
                 logger.warning("schedule_entry_skipped")
         return schedules
-
-    def _quarantine(self, exc: Exception) -> None:
-        """Keep an unreadable file as `.corrupt` so the next save cannot silently destroy it."""
-        backup = self._path.with_name(self._path.name + ".corrupt")
-        logger.warning("schedules_file_unreadable", error=str(exc), kept_as=backup.name)
-        with contextlib.suppress(OSError):
-            os.replace(self._path, backup)
 
     def all(self) -> list[Schedule]:
         with self._lock:
@@ -72,17 +60,7 @@ class ScheduleStore:
     # ---- writing ----
 
     def _save(self, schedules: list[Schedule]) -> None:
-        self._dir.mkdir(parents=True, exist_ok=True)
-        payload = json.dumps({"schedules": [s.to_dict() for s in schedules]}, indent=2)
-        handle, temp_name = tempfile.mkstemp(dir=self._dir, prefix=".schedules-", suffix=".tmp")
-        try:
-            with os.fdopen(handle, "w", encoding="utf-8") as temp:
-                temp.write(payload)
-            os.replace(temp_name, self._path)  # atomic: a crash never leaves half a file
-        except BaseException:
-            with contextlib.suppress(OSError):
-                os.unlink(temp_name)
-            raise
+        save_json(self._path, {"schedules": [s.to_dict() for s in schedules]})
 
     def _data_dir_of(self, schedule_id: str) -> Path:
         return self._dir / DATA_FOLDER / schedule_id

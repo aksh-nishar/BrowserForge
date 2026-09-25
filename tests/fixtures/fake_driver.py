@@ -9,6 +9,8 @@ from browserforge.engine.driver import (
     DriverTimeoutError,
     ElementNotFoundError,
     ElementState,
+    FormScan,
+    RawField,
 )
 
 DRIVER_METHODS = frozenset(
@@ -26,8 +28,35 @@ DRIVER_METHODS = frozenset(
         "wait_for_selector",
         "wait_for_url_contains",
         "get_element_state",
+        "scan_form",
     }
 )
+
+
+def raw_field(**overrides: Any) -> RawField:
+    """A RawField with sensible defaults (a visible, enabled, uniquely-identified text input)."""
+    base: RawField = {
+        "tag": "input",
+        "type": "text",
+        "id": "",
+        "name": "",
+        "label": "",
+        "group_label": "",
+        "placeholder": "",
+        "value": "",
+        "options": [],
+        "required": False,
+        "disabled": False,
+        "visible": True,
+        "id_count": 0,
+        "name_count": 0,
+    }
+    field: RawField = {**base, **overrides}  # type: ignore[typeddict-item]
+    if field["id"] and "id_count" not in overrides:
+        field["id_count"] = 1
+    if field["name"] and "name_count" not in overrides:
+        field["name_count"] = 1
+    return field
 
 
 @dataclass
@@ -62,6 +91,7 @@ class FakePageDriver:
         self._missing: set[str] = set()
         self._downloads: list[str] = []
         self._url_on_click: dict[str, str] = {}
+        self._forms: dict[str, FormScan] = {}
         self._failures: dict[str, list[Exception]] = {}
         self._always_fail: dict[str, Exception] = {}
 
@@ -99,6 +129,10 @@ class FakePageDriver:
 
     def set_url_on_click(self, selector: str, url: str) -> None:
         self._url_on_click[selector] = url
+
+    def set_form(self, url: str, fields: list[RawField], notes: list[str] | None = None) -> None:
+        """Script what `scan_form(url)` finds on that page."""
+        self._forms[url] = {"fields": fields, "notes": notes or []}
 
     def fail_on(self, method: str, exc: Exception, times: int | None = 1) -> None:
         """Make `method` raise `exc` for the next `times` calls (None = every call)."""
@@ -192,6 +226,11 @@ class FakePageDriver:
             raise DriverTimeoutError(
                 f"Timed out after {timeout_ms}ms waiting for URL containing '{fragment}'"
             )
+
+    def scan_form(self, url: str) -> FormScan:
+        self._enter("scan_form", url)
+        self.url = url
+        return self._forms.get(url, {"fields": [], "notes": []})
 
     def get_element_state(self, selector: str) -> ElementState | None:
         self._enter("get_element_state", selector)

@@ -4,7 +4,8 @@ import pytest
 from fastapi.testclient import TestClient
 from httpx2 import Response
 
-from browserforge.app import create_app, safe_recipe_name
+from browserforge.app import create_app
+from browserforge.recipe_files import safe_recipe_name
 
 VALID = "url: https://x.io\nsteps:\n  - type: click\n    selector: '#go'\n"
 

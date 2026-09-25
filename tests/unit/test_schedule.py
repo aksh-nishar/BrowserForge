@@ -127,8 +127,8 @@ def test_unknown_timezones_are_rejected(name: str) -> None:
 # ---- next_run_times ----
 
 
-def utc(*args: int) -> datetime:
-    return datetime(*args, tzinfo=UTC)
+def utc(year: int, month: int, day: int, hour: int = 0, minute: int = 0) -> datetime:
+    return datetime(year, month, day, hour, minute, tzinfo=UTC)
 
 
 def test_daily_runs_cross_a_month_boundary() -> None:
