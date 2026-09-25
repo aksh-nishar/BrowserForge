@@ -39,7 +39,10 @@ def live_app(tmp_path: Path) -> Iterator[LiveApp]:
         jobs_dir=jobs,
         driver_factory=lambda: playwright_driver(timeout_ms=4_000),
     )
-    server = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=0, log_level="warning"))
+    # log_config=None: uvicorn's default config rewires the global "uvicorn.*" loggers for the
+    # whole test process (propagate=False), which would leak into unrelated logging tests.
+    config = uvicorn.Config(app, host="127.0.0.1", port=0, log_level="warning", log_config=None)
+    server = uvicorn.Server(config)
     thread = threading.Thread(target=server.run, daemon=True)
     thread.start()
     deadline = time.monotonic() + 15

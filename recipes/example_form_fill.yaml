@@ -1,0 +1,58 @@
+# Example recipe B: fill in form fields, pick from a dropdown, tick a checkbox and upload a file.
+#
+# Runs against the-internet.herokuapp.com, a public practice site, so it needs no setup.
+# The upload path below is relative to where BrowserForge is started, so run it from the
+# project folder (or change the path to an absolute one).
+#
+# To adapt it to a client form: change the URLs and selectors, keep the step types.
+
+url: https://the-internet.herokuapp.com/inputs
+
+retries: 2
+backoff_seconds: 1
+
+steps:
+  # A number typed into an input. YAML numbers are fine: 42 is typed as "42".
+  - type: fill
+    name: enter_quantity
+    selector: "input[type=number]"
+    value: 42
+
+  - type: screenshot
+    name: form_filled
+
+  - type: goto
+    url: https://the-internet.herokuapp.com/dropdown
+
+  - type: select_option
+    name: pick_option
+    selector: "#dropdown"
+    value: "2"
+
+  - type: goto
+    url: https://the-internet.herokuapp.com/checkboxes
+
+  - type: check
+    name: tick_checkbox
+    selector: "#checkboxes input:nth-of-type(1)"
+
+  - type: goto
+    url: https://the-internet.herokuapp.com/upload
+
+  # `files` takes one path, or a list of paths. Every file must exist before the browser is
+  # touched, so a typo fails immediately with a clear message.
+  - type: upload
+    name: choose_file
+    selector: "#file-upload"
+    files: recipes/assets/sample_upload.txt
+
+  - type: click
+    name: submit_upload
+    selector: "#file-submit"
+
+  - type: wait_for_selector
+    name: wait_for_confirmation
+    selector: "#uploaded-files"
+
+  - type: screenshot
+    name: upload_confirmation

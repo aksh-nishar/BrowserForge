@@ -1,0 +1,2 @@
+BrowserForge sample upload file.
+Used by recipes/example_form_fill.yaml to demonstrate the upload step.

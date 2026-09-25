@@ -1,5 +1,6 @@
 """FastAPI app: routes only. Logic lives in browserforge.engine and browserforge.jobs."""
 
+import os
 import re
 from pathlib import Path
 from typing import Any
@@ -10,9 +11,11 @@ from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel, Field
 
+from browserforge.cli import ENV_JOBS_DIR, ENV_JSON_LOGS, ENV_RECIPES_DIR
 from browserforge.engine.driver import playwright_driver
 from browserforge.engine.recipe import RecipeValidationError, load_recipe, parse_recipe_text
 from browserforge.jobs import DriverFactory, JobNotFoundError, JobStore, run_job
+from browserforge.logging_config import configure_logging
 from browserforge.results import list_results, resolve_job_file
 
 logger = structlog.get_logger(__name__)
@@ -49,6 +52,20 @@ def list_recipe_files(recipes_dir: Path) -> list[Path]:
         for path in recipes_dir.glob(f"*{extension}"):
             by_name[path.stem] = path
     return [by_name[name] for name in sorted(by_name)]
+
+
+def create_default_app() -> FastAPI:
+    """The app `uv run browserforge` serves (uvicorn --factory).
+
+    Folders and log format come from the BROWSERFORGE_* environment variables that the
+    command line sets; logging is configured here, once, at startup.
+    """
+    json_logs = os.environ.get(ENV_JSON_LOGS) == "1"
+    configure_logging(json_logs=json_logs, log_file=Path("logs") / "app.log" if json_logs else None)
+    return create_app(
+        recipes_dir=Path(os.environ.get(ENV_RECIPES_DIR, "recipes")),
+        jobs_dir=Path(os.environ.get(ENV_JOBS_DIR, "jobs")),
+    )
 
 
 class JobRequest(BaseModel):
