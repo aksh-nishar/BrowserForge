@@ -24,6 +24,8 @@ from browserforge.engine.table_extract import extract_table
 
 logger = structlog.get_logger(__name__)
 
+_DEFAULT_WAIT_TIMEOUT_MS = 30_000
+
 
 @dataclass(frozen=True)
 class ActionResult:
@@ -78,6 +80,25 @@ def _run(
     except DriverError as exc:
         return _fail(step, str(exc))
     return ActionResult(success=True)
+
+
+def do_goto(driver: PageDriver, step: Step) -> ActionResult:
+    url = step.config.get("url")
+    if not isinstance(url, str) or not url.strip():
+        return _fail(step, "missing required field 'url'")
+    try:
+        driver.goto(url)
+    except DriverError as exc:
+        return _fail(step, str(exc))
+    return ActionResult(success=True)
+
+
+def do_wait_for_selector(driver: PageDriver, step: Step) -> ActionResult:
+    """Wait until `selector` appears. Optional timeout_ms (positive integer)."""
+    timeout_ms = step.config.get("timeout_ms", _DEFAULT_WAIT_TIMEOUT_MS)
+    if isinstance(timeout_ms, bool) or not isinstance(timeout_ms, int) or timeout_ms <= 0:
+        return _fail(step, "'timeout_ms' must be a positive integer")
+    return _run(step, lambda selector, _value: driver.wait_for_selector(selector, timeout_ms))
 
 
 def do_fill(driver: PageDriver, step: Step) -> ActionResult:

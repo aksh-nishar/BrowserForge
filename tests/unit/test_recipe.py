@@ -104,6 +104,17 @@ def test_missing_file_raises(tmp_path: Path) -> None:
         load_recipe(tmp_path / "nope.yaml")
 
 
+def test_continue_on_error_defaults_to_false_and_can_be_enabled() -> None:
+    assert parse_recipe({"url": "https://x.io"}).continue_on_error is False
+    assert parse_recipe({"url": "https://x.io", "continue_on_error": True}).continue_on_error
+
+
+@pytest.mark.parametrize("bad", ["yes", 1, [], None])
+def test_continue_on_error_must_be_a_boolean(bad: object) -> None:
+    with pytest.raises(RecipeValidationError, match="continue_on_error"):
+        parse_recipe({"url": "https://x.io", "continue_on_error": bad})
+
+
 def test_step_name_and_config_split() -> None:
     raw = {"type": "fill", "name": "user", "selector": "#u", "value": "bob"}
     step = parse_recipe({"url": "https://x.io", "steps": [raw]}).steps[0]

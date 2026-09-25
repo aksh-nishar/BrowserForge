@@ -40,6 +40,7 @@ class Recipe:
     url: str
     steps: list[Step] = field(default_factory=list)
     login: dict[str, Any] | None = None
+    continue_on_error: bool = False
 
 
 def _parse_step(index: int, raw: Any) -> Step:
@@ -78,8 +79,12 @@ def parse_recipe(data: Any) -> Recipe:
     if not isinstance(raw_steps, list):
         raise RecipeValidationError("'steps' must be a list")
 
+    continue_on_error = data.get("continue_on_error", False)
+    if not isinstance(continue_on_error, bool):
+        raise RecipeValidationError("'continue_on_error' must be true or false")
+
     steps = [_parse_step(i, raw) for i, raw in enumerate(raw_steps, start=1)]
-    return Recipe(url=url, steps=steps, login=login)
+    return Recipe(url=url, steps=steps, login=login, continue_on_error=continue_on_error)
 
 
 def load_recipe(path: str | Path) -> Recipe:
