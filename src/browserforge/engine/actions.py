@@ -18,7 +18,9 @@ from typing import Any
 import structlog
 
 from browserforge.engine.driver import DriverError, DriverTimeoutError, PageDriver
+from browserforge.engine.pagination import DEFAULT_MAX_PAGES, paginate_and_collect
 from browserforge.engine.recipe import Step
+from browserforge.engine.table_extract import extract_table
 
 logger = structlog.get_logger(__name__)
 
@@ -205,6 +207,64 @@ def do_screenshot(driver: PageDriver, step: Step, ctx: ActionContext) -> ActionR
     except OSError as exc:
         return _fail(step, f"could not create the screenshots folder: {exc}")
     return ActionResult(success=True, data={"path": str(path)})
+
+
+def _has_header_of(step: Step) -> bool | None:
+    """The step's `has_header` flag (default True), or None if it is not a boolean."""
+    value = step.config.get("has_header", True)
+    return value if isinstance(value, bool) else None
+
+
+def do_extract_table(driver: PageDriver, step: Step) -> ActionResult:
+    """Read the table at `selector` on the current page. data["rows"] is a list of dicts."""
+    selector = _selector_of(step)
+    if selector is None:
+        return _fail(step, "missing required field 'selector'")
+    has_header = _has_header_of(step)
+    if has_header is None:
+        return _fail(step, "'has_header' must be true or false")
+
+    try:
+        raw = driver.get_table_rows(selector)
+    except DriverError as exc:
+        return _fail(step, str(exc))
+    return ActionResult(success=True, data={"rows": extract_table(raw, has_header)})
+
+
+def do_paginate(driver: PageDriver, step: Step) -> ActionResult:
+    """Collect a table across pages. See paginate_and_collect.
+
+    Config: selector (table), next_selector, optional max_pages (default 50) and
+    has_header. data: rows (list of dicts), pages, truncated (True if the cap cut it short).
+    """
+    selector = _selector_of(step)
+    if selector is None:
+        return _fail(step, "missing required field 'selector'")
+    next_selector = step.config.get("next_selector")
+    if not isinstance(next_selector, str) or not next_selector.strip():
+        return _fail(step, "missing required field 'next_selector'")
+    has_header = _has_header_of(step)
+    if has_header is None:
+        return _fail(step, "'has_header' must be true or false")
+    max_pages = step.config.get("max_pages", DEFAULT_MAX_PAGES)
+    if isinstance(max_pages, bool) or not isinstance(max_pages, int) or max_pages < 1:
+        return _fail(step, "'max_pages' must be a positive integer")
+
+    try:
+        collected = paginate_and_collect(driver, selector, next_selector, max_pages, has_header)
+    except DriverError as exc:
+        return _fail(step, str(exc))
+
+    if collected.hit_cap:
+        logger.warning("pagination_cap_reached", step=step.name or step.type, max_pages=max_pages)
+    return ActionResult(
+        success=True,
+        data={
+            "rows": extract_table(collected.rows, has_header),
+            "pages": collected.pages,
+            "truncated": collected.hit_cap,
+        },
+    )
 
 
 _LOGIN_REQUIRED = (
