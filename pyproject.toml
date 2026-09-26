@@ -1,6 +1,6 @@
 [project]
 name = "browserforge"
-version = "0.1.0"
+version = "1.0.0"
 description = "Config-driven browser automation dashboard: YAML recipes run by Playwright"
 readme = "README.md"
 authors = [
